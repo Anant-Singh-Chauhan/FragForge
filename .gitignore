@@ -1,0 +1,28 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Node / n8n
+node_modules/
+.n8n/
+
+# Video/media files - too large for git, regenerable/source footage
+*.mp4
+*.mkv
+*.mov
+*.avi
+raw_clips/
+output/
+temp/
+
+# Environment/secrets
+.env
+*.key
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
