@@ -1,8 +1,11 @@
 """
-Stage 3: Trim (Kill-Feed Detection) + Vertical Crop + Kill-Feed Overlay
+Stage 3: Trim (Kill-Feed Detection) + Vertical Crop + Full HUD Overlays
 -----------------------------------------------------------------------
-Single-clip processing with OCR detection and killfeed overlay rendering.
-Outputs individual trimmed clips to output/trimmed/trim_YYYYMMDD_HHMMSS.mp4.
+Single-clip processing with OCR detection and complete HUD overlays:
+  1. Killfeed (Top-Right)
+  2. Health (Bottom-Left)
+  3. Ammo (Bottom-Right)
+Outputs individual clips to output/trimmed/trim_YYYYMMDD_HHMMSS.mp4.
 """
 
 from datetime import datetime
@@ -22,27 +25,38 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
-# --- Kill-Feed Overlay Configuration ---
-# Source coordinates on 1920x1080 canvas: (1350, 90) to (1910, 210)
+# --- 1. Kill-Feed Overlay Configuration ---
 KF_CROP_X = 1350
 KF_CROP_Y = 90
-KF_CROP_W = 560  # 1910 - 1350
-KF_CROP_H = 120  # 210 - 90
-
-# Position on final 1080x1920 vertical canvas
-KF_OVERLAY_X = "W-w-24" # 24px padding from right edge
-KF_OVERLAY_Y = "300"    # Placed 300px from top
+KF_CROP_W = 560
+KF_CROP_H = 120
+KF_OVERLAY_X = "W-w-24"
+KF_OVERLAY_Y = "300"
 KF_SCALE_W = 480
+
+# --- 2. Health HUD Configuration (Bottom-Left) ---
+HP_CROP_X = 525
+HP_CROP_Y = 1000
+HP_CROP_W = 130
+HP_CROP_H = 50
+HP_OVERLAY_X = "40"
+HP_OVERLAY_Y = "H-h-200"
+HP_SCALE_W = 220
+
+# --- 3. Ammo HUD Configuration (Bottom-Right) ---
+AMMO_CROP_X = 1267
+AMMO_CROP_Y = 1000
+AMMO_CROP_W = 130
+AMMO_CROP_H = 50
+AMMO_OVERLAY_X = "W-w-40"
+AMMO_OVERLAY_Y = "H-h-200"
+AMMO_SCALE_W = 220
 
 LEAD_BUFFER_SECONDS = 5.0
 TRAIL_BUFFER_SECONDS = 2.0
 
 
 def get_timestamped_path(target_dir: Path, base_name: str, ext: str = ".mp4") -> Path:
-    """
-    Generates a datetime-stamped filename: <base_name>_<YYYYMMDD_HHMMSS><ext>
-    Falls back to collision naming: <base_name>_<YYYYMMDD_HHMMSS>_1<ext>, _2, etc.
-    """
     target_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     target = target_dir / f"{base_name}_{timestamp}{ext}"
@@ -78,13 +92,20 @@ def process_clip(ffmpeg_exe: str, reader, input_path: Path, output_path: Path):
         end = min(duration, peaks[-1] + TRAIL_BUFFER_SECONDS)
 
     kf_scale = f",scale={KF_SCALE_W}:-1" if KF_SCALE_W else ""
+    hp_scale = f",scale={HP_SCALE_W}:-1" if HP_SCALE_W else ""
+    ammo_scale = f",scale={AMMO_SCALE_W}:-1" if AMMO_SCALE_W else ""
+
     vf = (
-        f"split=2[main][kf];"
+        f"split=4[main][kf][hp][ammo];"
         f"[main]crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
         f"scale={TARGET_WIDTH}:-2,"
         f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black[bg];"
         f"[kf]crop={KF_CROP_W}:{KF_CROP_H}:{KF_CROP_X}:{KF_CROP_Y}{kf_scale}[feed];"
-        f"[bg][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}"
+        f"[hp]crop={HP_CROP_W}:{HP_CROP_H}:{HP_CROP_X}:{HP_CROP_Y}{hp_scale}[health];"
+        f"[ammo]crop={AMMO_CROP_W}:{AMMO_CROP_H}:{AMMO_CROP_X}:{AMMO_CROP_Y}{ammo_scale}[ammunition];"
+        f"[bg][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}[tmp1];"
+        f"[tmp1][health]overlay={HP_OVERLAY_X}:{HP_OVERLAY_Y}[tmp2];"
+        f"[tmp2][ammunition]overlay={AMMO_OVERLAY_X}:{AMMO_OVERLAY_Y}"
     )
 
     cmd = [
