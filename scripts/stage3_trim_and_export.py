@@ -1,7 +1,7 @@
 """
-Stage 3: Trim (Kill-Feed Detection) + Vertical Crop + Video-Locked HUD Overlays
+Stage 3: Trim (Kill-Feed Detection) + Vertical Crop + Blurred BG + HUD Overlays
 -------------------------------------------------------------------------------
-Single-clip processing with OCR detection and 3 HUD overlays:
+Single-clip processing with OCR detection, blurred background padding, and 3 HUD overlays:
   1. Kill-Feed (Top-Right at Y=300)
   2. Health (Bottom-Left, inside video + 36px padding)
   3. Ammo (Bottom-Right, inside video + 36px padding)
@@ -26,7 +26,7 @@ TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
 # --- Canvas Geometry ---
-VIDEO_BOTTOM_Y = 1795  # Lower edge of active gameplay footage (above bottom letterbox)
+VIDEO_BOTTOM_Y = 1795  # Lower edge of active gameplay footage
 BOTTOM_PADDING = 36    # 36px padding above the video bottom boundary
 
 # --- 1. Kill-Feed Overlay Configuration ---
@@ -100,14 +100,15 @@ def process_clip(ffmpeg_exe: str, reader, input_path: Path, output_path: Path):
     ammo_scale = f",scale={AMMO_SCALE_W}:-2" if AMMO_SCALE_W else ""
 
     vf = (
-        f"split=4[main][kf][hp][ammo];"
-        f"[main]crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
-        f"scale={TARGET_WIDTH}:-2,"
-        f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black[bg];"
+        f"split=5[bg_in][main][kf][hp][ammo];"
+        f"[bg_in]scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={TARGET_WIDTH}:{TARGET_HEIGHT},boxblur=25:5,eq=brightness=-0.1[bg];"
+        f"[main]crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,scale={TARGET_WIDTH}:-2[vid];"
         f"[kf]crop={KF_CROP_W}:{KF_CROP_H}:{KF_CROP_X}:{KF_CROP_Y}{kf_scale}[feed];"
         f"[hp]crop={HP_CROP_W}:{HP_CROP_H}:{HP_CROP_X}:{HP_CROP_Y}{hp_scale}[health];"
         f"[ammo]crop={AMMO_CROP_W}:{AMMO_CROP_H}:{AMMO_CROP_X}:{AMMO_CROP_Y}{ammo_scale}[ammunition];"
-        f"[bg][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}[v1];"
+        f"[bg][vid]overlay=(W-w)/2:(H-h)/2[base];"
+        f"[base][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}[v1];"
         f"[v1][health]overlay={HP_OVERLAY_X}:{HP_OVERLAY_Y}[v2];"
         f"[v2][ammunition]overlay={AMMO_OVERLAY_X}:{AMMO_OVERLAY_Y}"
     )

@@ -1,13 +1,14 @@
 """
-Batch Compile: Kill-Feed Detection + Trim + Speed-Ramp + Video-Locked HUD Overlays + Compile
+Batch Compile: Kill-Feed Detection + Trim + Speed-Ramp + Blurred BG + HUD Overlays + Compile
 --------------------------------------------------------------------------------------------
 Workflow:
   1. Detects kill action via GPU OCR.
-  2. Crops 9:16 vertical gameplay and pads to 1080x1920.
-  3. Overlays Kill-Feed at Y=300.
-  4. Overlays Health & Ammo inside the gameplay area with a 36px buffer above the bottom video edge.
-  5. Exports per-clip cuts to output/trimmed/trim_YYYYMMDD_HHMMSS.mp4.
-  6. Crossfade-compiles into output/short_YYYYMMDD_HHMMSS.mp4.
+  2. Creates a 1080x1920 blurred/darkened background from the source clip to fill empty space.
+  3. Overlays the sharp 9:16 cropped gameplay centered in the canvas.
+  4. Overlays Kill-Feed at Y=300.
+  5. Overlays Health & Ammo inside the gameplay area with a 36px buffer above the bottom video edge.
+  6. Exports per-clip cuts to output/trimmed/trim_YYYYMMDD_HHMMSS.mp4.
+  7. Crossfade-compiles into output/short_YYYYMMDD_HHMMSS.mp4.
 """
 
 from datetime import datetime
@@ -32,7 +33,7 @@ TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
 # --- Canvas Geometry ---
-VIDEO_BOTTOM_Y = 1795  # Lower edge of active gameplay footage (above bottom letterbox)
+VIDEO_BOTTOM_Y = 1795  # Lower edge of active gameplay footage
 BOTTOM_PADDING = 36    # 36px padding above the video bottom boundary
 
 # --- 1. Kill-Feed Overlay Configuration ---
@@ -160,14 +161,15 @@ def get_base_filtergraph() -> str:
     ammo_scale = f",scale={AMMO_SCALE_W}:-2" if AMMO_SCALE_W else ""
 
     return (
-        f"split=4[main][kf][hp][ammo];"
-        f"[main]crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
-        f"scale={TARGET_WIDTH}:-2,"
-        f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black[bg];"
+        f"split=5[bg_in][main][kf][hp][ammo];"
+        f"[bg_in]scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={TARGET_WIDTH}:{TARGET_HEIGHT},boxblur=25:5,eq=brightness=-0.1[bg];"
+        f"[main]crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,scale={TARGET_WIDTH}:-2[vid];"
         f"[kf]crop={KF_CROP_W}:{KF_CROP_H}:{KF_CROP_X}:{KF_CROP_Y}{kf_scale}[feed];"
         f"[hp]crop={HP_CROP_W}:{HP_CROP_H}:{HP_CROP_X}:{HP_CROP_Y}{hp_scale}[health];"
         f"[ammo]crop={AMMO_CROP_W}:{AMMO_CROP_H}:{AMMO_CROP_X}:{AMMO_CROP_Y}{ammo_scale}[ammunition];"
-        f"[bg][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}[v1];"
+        f"[bg][vid]overlay=(W-w)/2:(H-h)/2[base];"
+        f"[base][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}[v1];"
         f"[v1][health]overlay={HP_OVERLAY_X}:{HP_OVERLAY_Y}[v2];"
         f"[v2][ammunition]overlay={AMMO_OVERLAY_X}:{AMMO_OVERLAY_Y}"
     )
