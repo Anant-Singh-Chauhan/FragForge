@@ -1,124 +1,92 @@
 """
-Stage 2: Detect Highlight Candidates via Audio Peaks
-------------------------------------------------------
-For each raw clip, extracts the audio track and finds moments where volume
-spikes sharply above the surrounding baseline - a cheap, reliable proxy for
-"something happened" (gunfire, a kill sound, a callout) in Valorant/CS2 footage.
+Stage 2: Kill-Feed OCR Detection (shared module)
+-----------------------------------------------------
+Watches the top-2 kill-feed slots for your player name and returns
+calibrated peak timestamps - the actual kill/death moments, latency-
+corrected for the kill-feed's render delay.
 
-This does NOT cut anything yet - it just prints candidate timestamps so you
-can sanity-check them against clips you already know are good, before we
-wire this into automatic extraction.
-
-Usage:
-    (venv) PS D:\\Personal\\LocalYt> python scripts\\stage2_detect_peaks.py
+Imported by batch_compile.py and stage3_trim_and_export.py rather than run
+directly, so the detection logic lives in one place.
 """
 
-import shutil
-import subprocess
-import sys
-from pathlib import Path
+import cv2
 
-import librosa
-import numpy as np
+KILLFEED_CROP_X1, KILLFEED_CROP_Y1 = 1350, 120
+KILLFEED_CROP_X2, KILLFEED_CROP_Y2 = 1910, 210  # top ~2 slots
+PLAYER_NAME = "avalanche"  # matched case-insensitively
 
-RAW_CLIPS_DIR = Path("raw_clips")
-TEMP_AUDIO_DIR = Path("temp")
+OCR_SAMPLE_INTERVAL_SECONDS = 0.5
+MIN_EVENT_GAP_SECONDS = 1.0
 
-# How far above the average volume a moment must be to count as a "peak"
-# Higher = fewer, more confident peaks. Lower = more (possibly noisier) peaks.
-PEAK_THRESHOLD_STD = 2.0
-
-# Minimum gap between two peaks (seconds) - avoids flagging the same gunfight
-# multiple times a fraction of a second apart.
-MIN_GAP_SECONDS = 3.0
+# Kill-feed text doesn't render instantly at the moment of the kill - there's
+# a short UI delay before it appears. This shifts detected timestamps back
+# to better match the actual crosshair-engagement moment, so exported clips
+# don't start mid-firefight.
+KILLFEED_LATENCY_OFFSET = 1.5
 
 
-def resolve_ffmpeg():
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path is None:
-        print("ffmpeg not found on PATH. Open a fresh terminal and try again.")
-        sys.exit(1)
-    return ffmpeg_path
-
-
-def extract_audio(ffmpeg_exe: str, video_path: Path, audio_path: Path):
-    """Pull just the audio track out of the clip as a .wav file for analysis."""
-    cmd = [
-        ffmpeg_exe,
-        "-i", str(video_path),
-        "-vn",              # no video
-        "-ac", "1",         # mono - simpler for volume analysis
-        "-ar", "22050",     # standard sample rate for audio analysis
-        "-y",
-        str(audio_path),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"  Audio extraction FAILED: {video_path.name}")
-        print(result.stderr[-500:])
-        return False
-    return True
-
-
-def find_peaks(audio_path: Path):
+def get_ocr_reader():
     """
-    Load the audio and find timestamps where volume (RMS energy) spikes
-    well above the clip's own average - these are our highlight candidates.
+    Load the EasyOCR model once. Reuse the returned reader across every clip
+    in a batch - reloading model weights per clip wastes significant time.
     """
-    y, sr = librosa.load(str(audio_path), sr=None)
+    import easyocr
+    print("Loading OCR model...")
+    try:
+        reader = easyocr.Reader(["en"], gpu=True)
+        print("  Using GPU.")
+    except Exception:
+        print("  GPU init failed, falling back to CPU (slower).")
+        reader = easyocr.Reader(["en"], gpu=False)
+    return reader
 
-    # RMS = root-mean-square energy, a standard measure of loudness over time
-    hop_length = 512
-    rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
-    times = librosa.times_like(rms, sr=sr, hop_length=hop_length)
 
-    mean, std = np.mean(rms), np.std(rms)
-    threshold = mean + PEAK_THRESHOLD_STD * std
+def detect_killfeed_peaks(reader, video_path):
+    """
+    Scan the clip's kill-feed crop region for PLAYER_NAME. Tracks how many
+    times the name currently appears in the crop (not just whether it's
+    visible at all), so back-to-back kills that stack in the feed at the
+    same time are each counted rather than collapsed into one event.
 
-    candidate_times = times[rms > threshold]
+    Returns (peaks, duration). Peaks are latency-corrected timestamps.
+    """
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = frame_count / fps if fps else 0.0
+    step = max(1, int(fps * OCR_SAMPLE_INTERVAL_SECONDS))
 
-    # Collapse candidates that are too close together into single peaks
+    last_count = 0
     peaks = []
-    for t in candidate_times:
-        if not peaks or (t - peaks[-1]) >= MIN_GAP_SECONDS:
-            peaks.append(t)
+    frame_idx = 0
 
-    return peaks
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
+        if frame_idx % step == 0:
+            t = frame_idx / fps
+            region = frame[KILLFEED_CROP_Y1:KILLFEED_CROP_Y2, KILLFEED_CROP_X1:KILLFEED_CROP_X2]
+            gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+            gray = cv2.convertScaleAbs(gray, alpha=1.5, beta=0)
 
-def main():
-    ffmpeg_exe = resolve_ffmpeg()
+            results = reader.readtext(gray, detail=0)
+            full_text = " ".join(results).lower()
+            current_count = full_text.count(PLAYER_NAME)
 
-    if not RAW_CLIPS_DIR.exists():
-        print(f"Input folder not found: {RAW_CLIPS_DIR}.")
-        sys.exit(1)
+            if current_count > last_count:
+                new_hits = current_count - last_count
+                calibrated_t = max(0.0, t - KILLFEED_LATENCY_OFFSET)
+                for _ in range(new_hits):
+                    if not peaks or (calibrated_t - peaks[-1]) >= MIN_EVENT_GAP_SECONDS:
+                        peaks.append(calibrated_t)
+                        print(f"    Kill-feed peak at {calibrated_t:.1f}s (raw detection {t:.1f}s)")
 
-    TEMP_AUDIO_DIR.mkdir(exist_ok=True)
+            last_count = current_count
 
-    exts = {".mp4", ".mkv", ".mov"}
-    clips = [f for f in RAW_CLIPS_DIR.iterdir() if f.suffix.lower() in exts]
+        frame_idx += 1
 
-    if not clips:
-        print(f"No video files found in {RAW_CLIPS_DIR}.")
-        sys.exit(0)
-
-    for clip in clips:
-        print(f"\n{clip.name}")
-        audio_path = TEMP_AUDIO_DIR / f"{clip.stem}.wav"
-
-        if not extract_audio(ffmpeg_exe, clip, audio_path):
-            continue
-
-        peaks = find_peaks(audio_path)
-
-        if not peaks:
-            print("  No strong peaks found - try lowering PEAK_THRESHOLD_STD.")
-        else:
-            print(f"  Found {len(peaks)} candidate moment(s):")
-            for t in peaks:
-                minutes, seconds = divmod(t, 60)
-                print(f"    {int(minutes):02d}:{seconds:05.2f}")
-
-
-if __name__ == "__main__":
-    main()
+    cap.release()
+    return peaks, duration

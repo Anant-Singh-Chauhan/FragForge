@@ -1,24 +1,16 @@
 """
-Batch Compile: Combine Trimmed Clips into One Short
--------------------------------------------------------
-One-shot batch script (not a continuous watcher).
+Batch Compile: Kill-Feed Detection + Trim + Speed-Ramp + Compile
+---------------------------------------------------------------------
+Uses the shared kill-feed OCR detection from stage2_detect_peaks.py. For
+each raw clip:
 
-Workflow per raw clip:
-  1. Detect audio peaks (RMS energy spikes).
-  2. Drop a trailing peak if it's clearly isolated from the real action
-     cluster (e.g. a laugh/callout well after the round ends) - prevents
-     chasing a stray peak into a long stretch of post-round talking.
-  3. Merge peaks into action "segments" using buffers around each peak.
-     If the gap between two segments is large (e.g. 26s of just rotating),
-     they stay SEPARATE segments - the dead time between them gets cut out
-     entirely (with a quick crossfade over the cut), instead of being kept
-     as part of one continuous trim.
-  4. If a clip only has one segment, export it directly. If multiple,
-     export each segment then crossfade-concat them into one per-clip output.
-
-Then across all clips: check total duration against the 60s budget (minus
-2s intro + 2s outro reserved for later), compile with crossfades if multiple
-clips, archive raw clips to raw_clips/processed/.
+  1. Detect kill-feed peaks (your player name appearing, latency-corrected).
+  2. Build a symmetric 2s-before/2s-after window around each peak.
+  3. Merge windows that are close together into continuous action blocks.
+     Gaps longer than GAP_SPEEDUP_THRESHOLD_SECONDS get speed-ramped (2x,
+     with a "2X" badge) instead of cut - keeps continuity without dead air.
+  4. Export the per-clip result, then compile multiple clips together with
+     crossfades, checking the 60s budget, and archive raw clips.
 
 Usage:
     (venv) PS D:\\Personal\\LocalYt> python scripts\\batch_compile.py
@@ -30,8 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import librosa
-import numpy as np
+from stage2_detect_peaks import get_ocr_reader, detect_killfeed_peaks
 
 RAW_CLIPS_DIR = Path("raw_clips")
 PROCESSED_DIR = RAW_CLIPS_DIR / "processed"
@@ -43,24 +34,13 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
-PEAK_THRESHOLD_STD = 2.8
-MIN_GAP_SECONDS = 3.0
+# Symmetric buffer around each detected kill-feed peak
 LEAD_BUFFER_SECONDS = 2.0
-TRAIL_BUFFER_SECONDS = 3.0
+TRAIL_BUFFER_SECONDS = 2.0
 
-# If the gap between two action moments exceeds this, it's a "dead" stretch
-# (e.g. rotating with no shooting) - instead of cutting it out, we keep it
-# but speed up the middle portion so it reads as intentional pacing rather
-# than an abrupt jump cut.
 GAP_SPEEDUP_THRESHOLD_SECONDS = 10.0
 SPEEDUP_FACTOR = 2.0
-SPEEDUP_EDGE_BUFFER_SECONDS = 1.0  # kept at normal speed on each side of a sped-up gap, for a smooth transition
-
-# If the LAST detected peak is separated from the one before it by more than
-# this, treat it as noise (a laugh, a callout after the round ends) rather
-# than real action, and drop it - prevents chasing a stray peak into 20s of
-# post-round talking.
-TRAILING_NOISE_GAP_SECONDS = 8.0
+SPEEDUP_EDGE_BUFFER_SECONDS = 1.0
 
 CONTENT_BUDGET_SECONDS = 60.0 - 2.0 - 2.0  # 60s target minus 2s intro + 2s outro
 CROSSFADE_SECONDS = 0.5
@@ -91,66 +71,8 @@ def get_duration(ffprobe_exe: str, path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def extract_audio(ffmpeg_exe: str, video_path: Path, audio_path: Path) -> bool:
-    cmd = [ffmpeg_exe, "-i", str(video_path), "-vn", "-ac", "1", "-ar", "22050", "-y", str(audio_path)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"  Audio extraction FAILED: {video_path.name}")
-        print(result.stderr[-500:])
-        return False
-    return True
-
-
-def find_peaks(audio_path: Path):
-    """
-    Isolate the percussive component of the audio (sharp transient bursts,
-    like gunfire) from the harmonic component (sustained tonal sound, like
-    voice/comms) before measuring loudness. This filters out a good chunk
-    of false positives from callouts, announcer lines, and chatter, which
-    are harmonic-dominant rather than percussive-dominant.
-    """
-    y, sr = librosa.load(str(audio_path), sr=None)
-    duration = librosa.get_duration(y=y, sr=sr)
-
-    # margin=3.0 biases the separation more strongly toward isolating
-    # percussive content - higher values are more aggressive about
-    # excluding tonal/harmonic sound.
-    y_percussive = librosa.effects.percussive(y, margin=3.0)
-
-    hop_length = 512
-    rms = librosa.feature.rms(y=y_percussive, hop_length=hop_length)[0]
-    times = librosa.times_like(rms, sr=sr, hop_length=hop_length)
-    mean, std = np.mean(rms), np.std(rms)
-    threshold = mean + PEAK_THRESHOLD_STD * std
-    candidate_times = times[rms > threshold]
-    peaks = []
-    for t in candidate_times:
-        if not peaks or (t - peaks[-1]) >= MIN_GAP_SECONDS:
-            peaks.append(t)
-    return peaks, duration
-
-
-def strip_isolated_trailing_peaks(peaks):
-    """
-    Drop trailing peaks that are clearly separated from the real action
-    cluster - e.g. a laugh/callout picked up well after the last real
-    gunfight, which would otherwise stretch the trim into post-round talk.
-    """
-    peaks = list(peaks)
-    while len(peaks) > 1 and (peaks[-1] - peaks[-2]) > TRAILING_NOISE_GAP_SECONDS:
-        print(f"    Dropping isolated trailing peak at {peaks[-1]:.1f}s (likely post-round noise)")
-        peaks.pop()
-    return peaks
-
-
 def build_action_blocks(peaks, duration):
-    """
-    Turn peaks into buffered windows, then merge windows that are close
-    together (gap <= GAP_SPEEDUP_THRESHOLD_SECONDS) into one continuous
-    block. Windows separated by a larger gap stay as separate blocks - the
-    dead time between them becomes a speed-ramped connector (see
-    build_pieces), not a cut.
-    """
+    """Buffer each peak (2s lead, 2s trail), then merge close windows."""
     if not peaks:
         return [(0.0, duration)]
 
@@ -170,12 +92,7 @@ def build_action_blocks(peaks, duration):
 
 
 def build_pieces(action_blocks):
-    """
-    Turn action blocks into an ordered list of pieces to export:
-    ("normal", start, end) for real action / short gaps, and
-    ("sped", start, end) for the speed-ramped middle of a long gap, bookended
-    by short normal-speed edges for a smooth transition.
-    """
+    """Interleave action blocks with speed-ramped connectors for large gaps."""
     pieces = [("normal", *action_blocks[0])]
 
     for i in range(1, len(action_blocks)):
@@ -189,7 +106,6 @@ def build_pieces(action_blocks):
             pieces.append(("sped", gap_start + edge, gap_end - edge))
             pieces.append(("normal", gap_end - edge, gap_end))
         else:
-            # Small gap - just keep it as-is, part of continuous normal footage
             pieces.append(("normal", gap_start, gap_end))
 
         pieces.append(("normal", *action_blocks[i]))
@@ -198,7 +114,6 @@ def build_pieces(action_blocks):
 
 
 def export_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, out_path: Path) -> bool:
-    """Trim [start, end] at normal speed, crop/zoom to vertical, export."""
     vf = (
         f"crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
         f"scale={TARGET_WIDTH}:-2,"
@@ -218,12 +133,6 @@ def export_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, out_pa
 
 
 def export_sped_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, out_path: Path) -> bool:
-    """
-    Trim [start, end], crop/zoom to vertical, speed up by SPEEDUP_FACTOR
-    (setpts speeds up video, atempo speeds up audio to match), and overlay
-    a small "2X" badge so the speed change reads as intentional pacing
-    rather than a glitch.
-    """
     vf = (
         f"crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
         f"scale={TARGET_WIDTH}:-2,"
@@ -247,11 +156,6 @@ def export_sped_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, o
 
 
 def concat_pieces(ffmpeg_exe: str, piece_paths: list, output_path: Path) -> bool:
-    """
-    Stream-copy concat a list of already-encoded pieces (same codec/resolution/
-    fps) into one file - fast, no re-encoding, no crossfade artifacts. Used for
-    stitching normal/sped pieces within a single source clip.
-    """
     filelist_path = TEMP_DIR / f"concat_list_{output_path.stem}.txt"
     with open(filelist_path, "w") as f:
         for p in piece_paths:
@@ -268,7 +172,6 @@ def concat_pieces(ffmpeg_exe: str, piece_paths: list, output_path: Path) -> bool
 
 
 def concat_with_crossfade(ffmpeg_exe: str, clips: list, durations: list, output_path: Path) -> bool:
-    """Crossfade-concat a list of clips (video + audio) into one output."""
     inputs = []
     for clip in clips:
         inputs += ["-i", str(clip)]
@@ -309,20 +212,17 @@ def natural_sort_key(path: Path):
     return int(match.group(1)) if match else float("inf")
 
 
-def run_stage3_on_clip(ffmpeg_exe: str, clip: Path, output_path: Path) -> bool:
-    audio_path = TEMP_DIR / f"{clip.stem}.wav"
-    if not extract_audio(ffmpeg_exe, clip, audio_path):
-        return False
+def process_clip(ffmpeg_exe: str, reader, clip: Path, output_path: Path) -> bool:
+    print(f"  Scanning kill-feed for {clip.name}...")
+    peaks, duration = detect_killfeed_peaks(reader, clip)
 
-    peaks, duration = find_peaks(audio_path)
-    peaks = strip_isolated_trailing_peaks(peaks)
-
-    print(f"    Raw peaks after noise filtering: {[f'{p:.1f}s' for p in peaks]}")
+    if not peaks:
+        print("    No kills detected - exporting full clip as fallback.")
 
     action_blocks = build_action_blocks(peaks, duration)
     pieces = build_pieces(action_blocks)
 
-    print(f"  {clip.name}: {len(pieces)} piece(s) after gap analysis")
+    print(f"  {len(pieces)} piece(s) after gap analysis:")
     for kind, s, e in pieces:
         tag = "SPED 2x" if kind == "sped" else "normal"
         print(f"    [{s:.2f}s - {e:.2f}s] {tag}")
@@ -373,18 +273,20 @@ def main():
     for c in raw_clips:
         print(f"  {c.name}")
 
-    stage3_outputs = []
+    reader = get_ocr_reader()  # loaded once, reused for every clip below
+
+    stage_outputs = []
     for clip in raw_clips:
         print(f"\nProcessing {clip.name}...")
         out_path = OUTPUT_DIR / f"{clip.stem}_vertical.mp4"
-        if run_stage3_on_clip(ffmpeg_exe, clip, out_path):
-            stage3_outputs.append(out_path)
+        if process_clip(ffmpeg_exe, reader, clip, out_path):
+            stage_outputs.append(out_path)
 
-    if not stage3_outputs:
+    if not stage_outputs:
         print("No clips were successfully processed. Stopping.")
         sys.exit(1)
 
-    durations = [get_duration(ffprobe_exe, p) for p in stage3_outputs]
+    durations = [get_duration(ffprobe_exe, p) for p in stage_outputs]
     total_duration = sum(durations)
 
     print(f"\nTotal combined duration: {total_duration:.1f}s (budget: {CONTENT_BUDGET_SECONDS:.0f}s)")
@@ -398,11 +300,11 @@ def main():
         sys.exit(1)
 
     final_output = OUTPUT_DIR / "compiled_short.mp4"
-    if len(stage3_outputs) == 1:
-        shutil.copy(stage3_outputs[0], final_output)
+    if len(stage_outputs) == 1:
+        shutil.copy(stage_outputs[0], final_output)
         print(f"Single clip - copied directly to {final_output.name}")
     else:
-        if not concat_with_crossfade(ffmpeg_exe, stage3_outputs, durations, final_output):
+        if not concat_with_crossfade(ffmpeg_exe, stage_outputs, durations, final_output):
             sys.exit(1)
 
     for clip in raw_clips:
