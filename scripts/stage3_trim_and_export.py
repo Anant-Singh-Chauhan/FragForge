@@ -1,14 +1,7 @@
 """
-Stage 3: Trim (Kill-Feed Detection) + Crop to Vertical + Export
---------------------------------------------------------------------
-Simpler single-clip tool (no multi-clip compile, no speed-ramping) - trims
-each raw clip from 2s before the first detected kill to 2s after the last,
-crops/zooms to vertical, and exports. For the full pipeline (speed-ramped
-gaps, multi-clip compile, budget checks, archiving), use batch_compile.py
-instead - this is a lighter option for quick one-off processing.
-
-Usage:
-    (venv) PS D:\\Personal\\LocalYt> python scripts\\stage3_trim_and_export.py
+Stage 3: Trim (Kill-Feed Detection) + Vertical Crop + Kill-Feed Overlay
+-----------------------------------------------------------------------
+Single-clip processing with OCR detection and killfeed overlay rendering.
 """
 
 import shutil
@@ -25,6 +18,18 @@ TARGET_FPS = 60
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
+
+# --- Kill-Feed Overlay Configuration ---
+# Source coordinates on 1920x1080 canvas
+KF_CROP_X = 1350
+KF_CROP_Y = 90          # Shifted up by 10px (was 100) to capture 10px more headroom at the top
+KF_CROP_W = 560
+KF_CROP_H = 200         # Expanded height by 10px (was 190) so bottom cutoff point stays identical
+
+# Position on final 1080x1920 vertical canvas
+KF_OVERLAY_X = "W-w-24" # 24px padding from right edge
+KF_OVERLAY_Y = "300"    # Moved 100px lower (was 200) to sit at 300px from top
+KF_SCALE_W = 480
 
 LEAD_BUFFER_SECONDS = 5.0
 TRAIL_BUFFER_SECONDS = 2.0
@@ -49,11 +54,16 @@ def process_clip(ffmpeg_exe: str, reader, input_path: Path, output_path: Path):
         start = max(0.0, peaks[0] - LEAD_BUFFER_SECONDS)
         end = min(duration, peaks[-1] + TRAIL_BUFFER_SECONDS)
 
+    kf_scale = f",scale={KF_SCALE_W}:-1" if KF_SCALE_W else ""
     vf = (
-        f"crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
+        f"split=2[main][kf];"
+        f"[main]crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
         f"scale={TARGET_WIDTH}:-2,"
-        f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black"
+        f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black[bg];"
+        f"[kf]crop={KF_CROP_W}:{KF_CROP_H}:{KF_CROP_X}:{KF_CROP_Y}{kf_scale}[feed];"
+        f"[bg][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}"
     )
+
     cmd = [
         ffmpeg_exe, "-ss", str(start), "-to", str(end), "-i", str(input_path),
         "-vf", vf, "-r", str(TARGET_FPS),
@@ -87,8 +97,7 @@ def main():
         sys.exit(0)
 
     print(f"Found {len(clips)} clip(s) to process.\n")
-
-    reader = get_ocr_reader()  # loaded once, reused for every clip below
+    reader = get_ocr_reader()
 
     for clip in clips:
         print(f"\n{clip.name}")

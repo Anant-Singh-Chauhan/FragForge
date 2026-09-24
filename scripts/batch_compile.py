@@ -1,19 +1,9 @@
 """
-Batch Compile: Kill-Feed Detection + Trim + Speed-Ramp + Compile
----------------------------------------------------------------------
-Uses the shared kill-feed OCR detection from stage2_detect_peaks.py. For
-each raw clip:
-
-  1. Detect kill-feed peaks (your player name appearing, latency-corrected).
-  2. Build a symmetric 2s-before/2s-after window around each peak.
-  3. Merge windows that are close together into continuous action blocks.
-     Gaps longer than GAP_SPEEDUP_THRESHOLD_SECONDS get speed-ramped (2x,
-     with a "2X" badge) instead of cut - keeps continuity without dead air.
-  4. Export the per-clip result, then compile multiple clips together with
-     crossfades, checking the 60s budget, and archive raw clips.
-
-Usage:
-    (venv) PS D:\\Personal\\LocalYt> python scripts\\batch_compile.py
+Batch Compile: Kill-Feed Detection + Trim + Speed-Ramp + Overlay + Compile
+--------------------------------------------------------------------------
+Extracts kill events via GPU OCR, crops gameplay to vertical 9:16,
+and re-lays the original top-right killfeed as an overlay ~200px below
+the top-right corner.
 """
 
 import re
@@ -34,15 +24,27 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
-# Symmetric buffer around each detected kill-feed peak
-LEAD_BUFFER_SECONDS = 5.0   # normal-pace setup time before a kill - avoids feeling rushed
+
+# --- Kill-Feed Overlay Configuration ---
+# Source coordinates on 1920x1080 canvas
+KF_CROP_X = 1350
+KF_CROP_Y = 90          # Shifted up by 10px (was 100) to capture 10px more headroom at the top
+KF_CROP_W = 560
+KF_CROP_H = 200         # Expanded height by 10px (was 190) so bottom cutoff point stays identical
+
+# Position on final 1080x1920 vertical canvas
+KF_OVERLAY_X = "W-w-24" # 24px padding from right edge
+KF_OVERLAY_Y = "300"    # Moved 100px lower (was 200) to sit at 300px from top
+KF_SCALE_W = 480
+
+LEAD_BUFFER_SECONDS = 5.0
 TRAIL_BUFFER_SECONDS = 2.0
 
 GAP_SPEEDUP_THRESHOLD_SECONDS = 10.0
 SPEEDUP_FACTOR = 2.0
-SPEEDUP_EDGE_BUFFER_SECONDS = 2.0  # widened from 1.0 for extra safety margin around speed-ramped zones
+SPEEDUP_EDGE_BUFFER_SECONDS = 2.0
 
-CONTENT_BUDGET_SECONDS = 60.0 - 2.0 - 2.0  # 60s target minus 2s intro + 2s outro
+CONTENT_BUDGET_SECONDS = 60.0 - 2.0 - 2.0  # 56s total allowance
 CROSSFADE_SECONDS = 0.5
 
 
@@ -72,7 +74,6 @@ def get_duration(ffprobe_exe: str, path: Path) -> float:
 
 
 def build_action_blocks(peaks, duration):
-    """Buffer each peak (2s lead, 2s trail), then merge close windows."""
     if not peaks:
         return [(0.0, duration)]
 
@@ -92,7 +93,6 @@ def build_action_blocks(peaks, duration):
 
 
 def build_pieces(action_blocks):
-    """Interleave action blocks with speed-ramped connectors for large gaps."""
     pieces = [("normal", *action_blocks[0])]
 
     for i in range(1, len(action_blocks)):
@@ -113,12 +113,20 @@ def build_pieces(action_blocks):
     return pieces
 
 
-def export_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, out_path: Path) -> bool:
-    vf = (
-        f"crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
+def get_base_filtergraph() -> str:
+    kf_scale = f",scale={KF_SCALE_W}:-1" if KF_SCALE_W else ""
+    return (
+        f"split=2[main][kf];"
+        f"[main]crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
         f"scale={TARGET_WIDTH}:-2,"
-        f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black"
+        f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black[bg];"
+        f"[kf]crop={KF_CROP_W}:{KF_CROP_H}:{KF_CROP_X}:{KF_CROP_Y}{kf_scale}[feed];"
+        f"[bg][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}"
     )
+
+
+def export_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, out_path: Path) -> bool:
+    vf = get_base_filtergraph()
     cmd = [
         ffmpeg_exe, "-ss", str(start), "-to", str(end), "-i", str(clip),
         "-vf", vf, "-r", str(TARGET_FPS),
@@ -133,10 +141,9 @@ def export_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, out_pa
 
 
 def export_sped_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, out_path: Path) -> bool:
+    base_vf = get_base_filtergraph()
     vf = (
-        f"crop=ih*9/16*{ZOOM_OUT_FACTOR}:ih,"
-        f"scale={TARGET_WIDTH}:-2,"
-        f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"{base_vf},"
         f"setpts={1/SPEEDUP_FACTOR}*PTS,"
         f"drawtext=fontfile='C\\:/Windows/Fonts/arialbd.ttf':text='2X':fontcolor=white:fontsize=48:"
         f"box=1:boxcolor=black@0.6:boxborderw=12:x=w-tw-40:y=40"
@@ -273,7 +280,7 @@ def main():
     for c in raw_clips:
         print(f"  {c.name}")
 
-    reader = get_ocr_reader()  # loaded once, reused for every clip below
+    reader = get_ocr_reader()
 
     stage_outputs = []
     for clip in raw_clips:
