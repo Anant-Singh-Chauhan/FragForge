@@ -1,14 +1,13 @@
 """
-Batch Compile: Kill-Feed Detection + Trim + Speed-Ramp + Full HUD Overlays + Compile
-------------------------------------------------------------------------------------
-Extracts kill events via GPU OCR, crops gameplay to vertical 9:16,
-and adds 3 HUD overlays:
-  1. Top-Right: Killfeed (Y=300)
-  2. Bottom-Left: Health bar/number
-  3. Bottom-Right: Ammo counter
-Outputs:
-  - Per-clip trimmed segments -> output/trimmed/trim_YYYYMMDD_HHMMSS.mp4
-  - Master assembled short -> output/short_YYYYMMDD_HHMMSS.mp4
+Batch Compile: Kill-Feed Detection + Trim + Speed-Ramp + Video-Locked HUD Overlays + Compile
+--------------------------------------------------------------------------------------------
+Workflow:
+  1. Detects kill action via GPU OCR.
+  2. Crops 9:16 vertical gameplay and pads to 1080x1920.
+  3. Overlays Kill-Feed at Y=300.
+  4. Overlays Health & Ammo inside the gameplay area with a 36px buffer above the bottom video edge.
+  5. Exports per-clip cuts to output/trimmed/trim_YYYYMMDD_HHMMSS.mp4.
+  6. Crossfade-compiles into output/short_YYYYMMDD_HHMMSS.mp4.
 """
 
 from datetime import datetime
@@ -32,6 +31,10 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
+# --- Canvas Geometry ---
+VIDEO_BOTTOM_Y = 1795  # Lower edge of active gameplay footage (above bottom letterbox)
+BOTTOM_PADDING = 36    # 36px padding above the video bottom boundary
+
 # --- 1. Kill-Feed Overlay Configuration ---
 KF_CROP_X = 1350
 KF_CROP_Y = 90
@@ -41,22 +44,22 @@ KF_OVERLAY_X = "W-w-24"
 KF_OVERLAY_Y = "300"
 KF_SCALE_W = 480
 
-# --- 2. Health HUD Configuration (Bottom-Left) ---
+# --- 2. Health HUD Configuration (Bottom-Left, inside video + 36px padding) ---
 HP_CROP_X = 525
 HP_CROP_Y = 1000
-HP_CROP_W = 130   # 655 - 525
-HP_CROP_H = 50    # 1050 - 1000
-HP_OVERLAY_X = "40"
-HP_OVERLAY_Y = "H-h-200"  # 200px above bottom edge to clear Shorts title UI
-HP_SCALE_W = 220          # Scaled for mobile readability
+HP_CROP_W = 130
+HP_CROP_H = 50
+HP_OVERLAY_X = "0"
+HP_OVERLAY_Y = f"{VIDEO_BOTTOM_Y}-h-{BOTTOM_PADDING}"
+HP_SCALE_W = 220
 
-# --- 3. Ammo HUD Configuration (Bottom-Right) ---
+# --- 3. Ammo HUD Configuration (Bottom-Right, inside video + 36px padding) ---
 AMMO_CROP_X = 1267
 AMMO_CROP_Y = 1000
-AMMO_CROP_W = 130  # 1397 - 1267
-AMMO_CROP_H = 50   # 1050 - 1000
-AMMO_OVERLAY_X = "W-w-40"
-AMMO_OVERLAY_Y = "H-h-200"
+AMMO_CROP_W = 130
+AMMO_CROP_H = 50
+AMMO_OVERLAY_X = "W-w"
+AMMO_OVERLAY_Y = f"{VIDEO_BOTTOM_Y}-h-{BOTTOM_PADDING}"
 AMMO_SCALE_W = 220
 
 LEAD_BUFFER_SECONDS = 5.0
@@ -152,10 +155,9 @@ def build_pieces(action_blocks):
 
 
 def get_base_filtergraph() -> str:
-    """Splits into 4 streams, crops main 9:16 + 3 HUD elements, and composites them."""
-    kf_scale = f",scale={KF_SCALE_W}:-1" if KF_SCALE_W else ""
-    hp_scale = f",scale={HP_SCALE_W}:-1" if HP_SCALE_W else ""
-    ammo_scale = f",scale={AMMO_SCALE_W}:-1" if AMMO_SCALE_W else ""
+    kf_scale = f",scale={KF_SCALE_W}:-2" if KF_SCALE_W else ""
+    hp_scale = f",scale={HP_SCALE_W}:-2" if HP_SCALE_W else ""
+    ammo_scale = f",scale={AMMO_SCALE_W}:-2" if AMMO_SCALE_W else ""
 
     return (
         f"split=4[main][kf][hp][ammo];"
@@ -165,9 +167,9 @@ def get_base_filtergraph() -> str:
         f"[kf]crop={KF_CROP_W}:{KF_CROP_H}:{KF_CROP_X}:{KF_CROP_Y}{kf_scale}[feed];"
         f"[hp]crop={HP_CROP_W}:{HP_CROP_H}:{HP_CROP_X}:{HP_CROP_Y}{hp_scale}[health];"
         f"[ammo]crop={AMMO_CROP_W}:{AMMO_CROP_H}:{AMMO_CROP_X}:{AMMO_CROP_Y}{ammo_scale}[ammunition];"
-        f"[bg][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}[tmp1];"
-        f"[tmp1][health]overlay={HP_OVERLAY_X}:{HP_OVERLAY_Y}[tmp2];"
-        f"[tmp2][ammunition]overlay={AMMO_OVERLAY_X}:{AMMO_OVERLAY_Y}"
+        f"[bg][feed]overlay={KF_OVERLAY_X}:{KF_OVERLAY_Y}[v1];"
+        f"[v1][health]overlay={HP_OVERLAY_X}:{HP_OVERLAY_Y}[v2];"
+        f"[v2][ammunition]overlay={AMMO_OVERLAY_X}:{AMMO_OVERLAY_Y}"
     )
 
 
@@ -208,7 +210,7 @@ def export_sped_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, o
     return True
 
 
-def concat_pieces(ffmpeg_exe: str, piece_paths: list, output_path: Path) -> bool:
+def concat_pieces(ffmpeg_exe: str, piece_paths: List[Path], output_path: Path) -> bool:
     filelist_path = TEMP_DIR / f"concat_list_{output_path.stem}.txt"
     with open(filelist_path, "w") as f:
         for p in piece_paths:
@@ -224,7 +226,7 @@ def concat_pieces(ffmpeg_exe: str, piece_paths: list, output_path: Path) -> bool
     return True
 
 
-def concat_with_crossfade(ffmpeg_exe: str, clips: list, durations: list, output_path: Path) -> bool:
+def concat_with_crossfade(ffmpeg_exe: str, clips: List[Path], durations: List[float], output_path: Path) -> bool:
     inputs = []
     for clip in clips:
         inputs += ["-i", str(clip)]
