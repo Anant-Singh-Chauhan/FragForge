@@ -23,12 +23,15 @@ TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
 # --- Kill-Feed Overlay Configuration ---
+# Source coordinates on 1920x1080 canvas: (1350, 90) to (1910, 210)
 KF_CROP_X = 1350
-KF_CROP_Y = 90          # Shifted up by 10px to capture upper card margin
-KF_CROP_W = 560
-KF_CROP_H = 200         # Expanded height by 10px so bottom cutoff point stays identical
+KF_CROP_Y = 90
+KF_CROP_W = 560  # 1910 - 1350
+KF_CROP_H = 120  # 210 - 90
+
+# Position on final 1080x1920 vertical canvas
 KF_OVERLAY_X = "W-w-24" # 24px padding from right edge
-KF_OVERLAY_Y = "300"    # Moved 100px lower to sit at 300px from top
+KF_OVERLAY_Y = "300"    # Placed 300px from top
 KF_SCALE_W = 480
 
 LEAD_BUFFER_SECONDS = 5.0
