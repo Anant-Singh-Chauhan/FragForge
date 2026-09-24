@@ -1,0 +1,23 @@
+# Python virtual environment - not needed inside the container,
+# which installs its own packages fresh via requirements.txt
+venv/
+__pycache__/
+*.pyc
+
+# Media files and working folders - these get volume-mounted at runtime,
+# not baked into the image
+raw_clips/
+output/
+temp/
+
+# Git
+.git/
+.gitignore
+
+# n8n data (persisted via its own named volume, not needed in this image)
+.n8n/
+
+# Editor/OS junk
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,23 @@
+# Start everything:  docker compose up
+# Stop everything (frees all resources): docker compose down
+# Run in background instead of blocking your terminal: docker compose up -d
+
+services:
+  pipeline:
+    build: .
+    volumes:
+      - ./raw_clips:/app/raw_clips
+      - ./output:/app/output
+      - ./temp:/app/temp
+    restart: "no"  # only runs while the container is up; doesn't auto-restart on reboot
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: "no"
+
+volumes:
+  n8n_data:

@@ -1,0 +1,7 @@
+opencv-python
+moviepy
+numpy
+watchdog
+librosa
+soundfile
+requests
