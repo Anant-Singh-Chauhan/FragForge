@@ -35,12 +35,12 @@ TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
 # Symmetric buffer around each detected kill-feed peak
-LEAD_BUFFER_SECONDS = 2.0
+LEAD_BUFFER_SECONDS = 5.0   # normal-pace setup time before a kill - avoids feeling rushed
 TRAIL_BUFFER_SECONDS = 2.0
 
 GAP_SPEEDUP_THRESHOLD_SECONDS = 10.0
 SPEEDUP_FACTOR = 2.0
-SPEEDUP_EDGE_BUFFER_SECONDS = 1.0
+SPEEDUP_EDGE_BUFFER_SECONDS = 2.0  # widened from 1.0 for extra safety margin around speed-ramped zones
 
 CONTENT_BUDGET_SECONDS = 60.0 - 2.0 - 2.0  # 60s target minus 2s intro + 2s outro
 CROSSFADE_SECONDS = 0.5
