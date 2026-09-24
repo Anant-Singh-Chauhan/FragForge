@@ -2,8 +2,10 @@
 Stage 3: Trim (Kill-Feed Detection) + Vertical Crop + Kill-Feed Overlay
 -----------------------------------------------------------------------
 Single-clip processing with OCR detection and killfeed overlay rendering.
+Outputs individual trimmed clips to output/trimmed/trim_YYYYMMDD_HHMMSS.mp4.
 """
 
+from datetime import datetime
 import shutil
 import subprocess
 import sys
@@ -13,6 +15,7 @@ from stage2_detect_peaks import get_ocr_reader, detect_killfeed_peaks
 
 RAW_CLIPS_DIR = Path("raw_clips")
 OUTPUT_DIR = Path("output")
+TRIMMED_DIR = OUTPUT_DIR / "trimmed"
 
 TARGET_FPS = 60
 TARGET_WIDTH = 1080
@@ -20,19 +23,36 @@ TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
 # --- Kill-Feed Overlay Configuration ---
-# Source coordinates on 1920x1080 canvas
 KF_CROP_X = 1350
-KF_CROP_Y = 90          # Shifted up by 10px (was 100) to capture 10px more headroom at the top
+KF_CROP_Y = 90          # Shifted up by 10px to capture upper card margin
 KF_CROP_W = 560
-KF_CROP_H = 200         # Expanded height by 10px (was 190) so bottom cutoff point stays identical
-
-# Position on final 1080x1920 vertical canvas
+KF_CROP_H = 200         # Expanded height by 10px so bottom cutoff point stays identical
 KF_OVERLAY_X = "W-w-24" # 24px padding from right edge
-KF_OVERLAY_Y = "300"    # Moved 100px lower (was 200) to sit at 300px from top
+KF_OVERLAY_Y = "300"    # Moved 100px lower to sit at 300px from top
 KF_SCALE_W = 480
 
 LEAD_BUFFER_SECONDS = 5.0
 TRAIL_BUFFER_SECONDS = 2.0
+
+
+def get_timestamped_path(target_dir: Path, base_name: str, ext: str = ".mp4") -> Path:
+    """
+    Generates a datetime-stamped filename: <base_name>_<YYYYMMDD_HHMMSS><ext>
+    Falls back to collision naming: <base_name>_<YYYYMMDD_HHMMSS>_1<ext>, _2, etc.
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    target = target_dir / f"{base_name}_{timestamp}{ext}"
+
+    if not target.exists():
+        return target
+
+    counter = 1
+    while True:
+        target = target_dir / f"{base_name}_{timestamp}_{counter}{ext}"
+        if not target.exists():
+            return target
+        counter += 1
 
 
 def resolve_ffmpeg():
@@ -88,6 +108,7 @@ def main():
         sys.exit(1)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
+    TRIMMED_DIR.mkdir(parents=True, exist_ok=True)
 
     exts = {".mp4", ".mkv", ".mov"}
     clips = [f for f in RAW_CLIPS_DIR.iterdir() if f.is_file() and f.suffix.lower() in exts]
@@ -101,7 +122,7 @@ def main():
 
     for clip in clips:
         print(f"\n{clip.name}")
-        output_path = OUTPUT_DIR / f"{clip.stem}_vertical.mp4"
+        output_path = get_timestamped_path(TRIMMED_DIR, base_name="trim")
         process_clip(ffmpeg_exe, reader, clip, output_path)
 
 
