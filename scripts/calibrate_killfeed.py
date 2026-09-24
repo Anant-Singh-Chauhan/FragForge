@@ -17,7 +17,7 @@ import cv2
 
 # Starting guess for Valorant's kill-feed region at 1920x1080 (top-right HUD
 # area). Adjust these based on what the saved images show.
-CROP_X1, CROP_Y1 = 1350, 130
+CROP_X1, CROP_Y1 = 1350, 90
 CROP_X2, CROP_Y2 = 1910, 210
 
 # Which second into the video to grab a sample frame from (pick a moment
