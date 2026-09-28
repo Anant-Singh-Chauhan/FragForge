@@ -2,8 +2,8 @@
 Batch Compile: Multi-Game Dynamic Compiler with Intro, Outro & Sync-Locked BGM
 ------------------------------------------------------------------------------
 1. Discovers clips strictly from configured game folders (shallow scan).
-2. Generates dynamic Intro (1.5x zoom-in, fade-in, softened glitch audio).
-3. Generates Outro (zoom-out, glitch flashes, fade-out, softened glitch audio).
+2. Generates dynamic Intro (2.0x zoom-in, fade-in, silent audio).
+3. Generates Outro (zoom-out, block glitch flashes, fade-out, glitch audio).
 4. Renders trimmed clips with HUD overlays to output/trimmed/.
 5. Compiles sequence in a single complex filtergraph to prevent audio/video desync.
 6. Layers background music starting at 12s with fade-in and dynamic end fade-out.
@@ -138,35 +138,18 @@ def render_intro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
 
     vf = (
         f"color=c=black:s={TARGET_WIDTH}x{TARGET_HEIGHT}:d={INTRO_DURATION}:r={TARGET_FPS}[bg];"
-        f"[0:v]scale=eval=frame:w='2*trunc(360*({INTRO_START_ZOOM}-0.5*t/{INTRO_DURATION}))':h=-2[logo];"
+        f"[0:v]scale=eval=frame:w='2*trunc(360*({INTRO_START_ZOOM}+0.3*t/{INTRO_DURATION}))':h=-2[logo];"
         f"[bg][logo]overlay=(W-w)/2:(H-h)/2[centered];"
         f"[centered]fade=t=in:st=0:d=0.4[vout]"
     )
 
-    if GLITCH_SFX_PATH.exists():
-        audio_inputs = ["-t", str(INTRO_DURATION), "-i", str(GLITCH_SFX_PATH)]
-        audio_filter = (
-            f"[1:a]volume={GLITCH_VOLUME},"
-            f"afade=t=in:st=0:d=0.4,"
-            f"afade=t=out:st={INTRO_DURATION-0.5}:d=0.5,"
-            f"apad,atrim=0:{INTRO_DURATION}[aout]"
-        )
-        audio_map = "[aout]"
-    else:
-        audio_inputs = ["-f", "lavfi", "-t", str(INTRO_DURATION), "-i",
-                        f"anoisesrc=d={INTRO_DURATION}:c=white:r=48000"]
-        audio_filter = (
-            f"[1:a]volume={GLITCH_VOLUME * 0.8},highpass=f=600,lowpass=f=4000,"
-            f"afade=t=in:st=0:d=0.4,afade=t=out:st={INTRO_DURATION-0.5}:d=0.5,"
-            f"apad,atrim=0:{INTRO_DURATION}[aout]"
-        )
-        audio_map = "[aout]"
-
+    audio_inputs = ["-f", "lavfi", "-t", str(INTRO_DURATION), "-i", f"anullsrc=channel_layout=stereo:sample_rate=48000:d={INTRO_DURATION}"]
+    
     cmd = [
         ffmpeg_exe, "-loop", "1", "-t", str(INTRO_DURATION), "-i", str(LOGO_PATH),
         *audio_inputs,
-        "-filter_complex", f"{vf};{audio_filter}",
-        "-map", "[vout]", "-map", audio_map,
+        "-filter_complex", vf,
+        "-map", "[vout]", "-map", "1:a",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k", "-y", str(output_path),
     ]
@@ -179,12 +162,13 @@ def render_outro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
         print(f"Warning: Logo not found at {LOGO_PATH}. Skipping outro card.")
         return False
 
+    # Block Glitch: scales down to chunky pixels, scales back up via nearest-neighbor, shifts RGB, adds noise
     vf = (
         f"color=c=black:s={TARGET_WIDTH}x{TARGET_HEIGHT}:d={OUTRO_DURATION}:r={TARGET_FPS}[bg];"
         f"[0:v]scale=eval=frame:w='2*trunc(360*(1.1-0.25*t/{OUTRO_DURATION}))':h=-2[logo];"
         f"[bg][logo]overlay=(W-w)/2:(H-h)/2[clean];"
         f"[clean]split[c1][c2];"
-        f"[c2]rgbashift=rh=22:bv=-22,noise=alls=25:allf=t+u[glitched];"
+        f"[c2]scale=iw/24:ih/24,scale=24*iw:24*ih:flags=neighbor,rgbashift=rh=35:bv=-35,noise=alls=25:allf=t+u[glitched];"
         f"[c1][glitched]overlay=enable='between(t,1.05,1.15)+between(t,1.3,1.42)+gte(t,1.6)'[gvid];"
         f"[gvid]fade=t=out:st=1.5:d=0.5[vout]"
     )
@@ -221,10 +205,6 @@ def render_outro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
 
 
 def compile_master_sequence(ffmpeg_exe: str, clips: List[Path], durations: List[float], output_path: Path) -> bool:
-    """
-    Combines crossfading and BGM layering into a single process.
-    Forces strict PTS normalization on audio streams before transitioning to prevent audio desync.
-    """
     inputs = []
     for clip in clips:
         inputs.extend(["-i", str(clip)])
@@ -236,7 +216,6 @@ def compile_master_sequence(ffmpeg_exe: str, clips: List[Path], durations: List[
     bgm_idx = len(clips)
     filter_parts = []
 
-    # 1. Normalize timestamps to 0 to prevent sync drift
     for i in range(len(clips)):
         filter_parts.append(f"[{i}:v]setpts=PTS-STARTPTS[v_n{i}]")
         filter_parts.append(f"[{i}:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[a_n{i}]")
@@ -245,7 +224,6 @@ def compile_master_sequence(ffmpeg_exe: str, clips: List[Path], durations: List[
     prev_v = "v_n0"
     prev_a = "a_n0"
     
-    # 2. Apply Video & Audio crossfades sequentially
     for i in range(1, len(clips)):
         running_offset += durations[i - 1] - CROSSFADE_SECONDS
         v_out, a_out = f"v_xf{i}", f"a_xf{i}"
@@ -263,7 +241,6 @@ def compile_master_sequence(ffmpeg_exe: str, clips: List[Path], durations: List[
     final_a = prev_a
     master_dur = running_offset + durations[-1]
     
-    # 3. Layer BGM globally underneath the entire assembled timeline
     if has_bgm:
         fade_out_start = max(0.0, master_dur - BGM_FADE_DURATION)
         filter_parts.append(
@@ -565,7 +542,6 @@ def main():
             else:
                 print(f"Failed compiling master sequence for {profile['name']}.")
 
-            # Cleanup temporary assembled assets
             if has_intro:
                 intro_path.unlink(missing_ok=True)
             if has_outro:

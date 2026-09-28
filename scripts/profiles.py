@@ -27,11 +27,11 @@ GLITCH_SFX_PATH = Path("glitched_sound.mp3")
 
 INTRO_DURATION = 2.0
 OUTRO_DURATION = 2.0
-INTRO_START_ZOOM = 1.5      # Starts at 1.5x zoom and zooms out
-GLITCH_VOLUME = 0.14        # Reduced by 30% from 0.20
+INTRO_START_ZOOM = 2.0      # Starts at 2.0x zoom and zooms in
+GLITCH_VOLUME = 0.14        # Used for outro glitch sound
 
 BGM_START_TIMESTAMP = 12.0  # Seek offset into the MP3 track
-BGM_VOLUME = 0.15           # Reduced by 30% from 0.22
+BGM_VOLUME = 0.075          # Reduced to half of 0.15
 BGM_FADE_DURATION = 1.5     # Fade in/out duration in seconds
 
 # =====================================================================
