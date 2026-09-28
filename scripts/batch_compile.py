@@ -2,8 +2,8 @@
 Batch Compile: Multi-Game Dynamic Compiler with Intro, Outro & Sync-Locked BGM
 ------------------------------------------------------------------------------
 1. Discovers clips strictly from configured game folders (shallow scan).
-2. Generates dynamic Intro (2.0x zoom-in, fade-in, silent audio).
-3. Generates Outro (zoom-out, block glitch flashes, fade-out, glitch audio).
+2. Generates dynamic Intro (1.5s duration, 2.0x -> 1.0x zoom-out, aggressive 0.2s fade-in, silent audio).
+3. Generates Outro (zoom-out, chunky block glitch flashes, fade-out, glitch audio).
 4. Renders trimmed clips with HUD overlays to output/trimmed/.
 5. Compiles sequence in a single complex filtergraph to prevent audio/video desync.
 6. Layers background music starting at 12s with fade-in and dynamic end fade-out.
@@ -136,11 +136,12 @@ def render_intro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
         print(f"Warning: Logo not found at {LOGO_PATH}. Skipping intro card.")
         return False
 
+    zoom_diff = INTRO_START_ZOOM - 1.0
     vf = (
         f"color=c=black:s={TARGET_WIDTH}x{TARGET_HEIGHT}:d={INTRO_DURATION}:r={TARGET_FPS}[bg];"
-        f"[0:v]scale=eval=frame:w='2*trunc(360*({INTRO_START_ZOOM}+0.3*t/{INTRO_DURATION}))':h=-2[logo];"
+        f"[0:v]scale=eval=frame:w='2*trunc(360*({INTRO_START_ZOOM}-({zoom_diff}*t/{INTRO_DURATION})))':h=-2[logo];"
         f"[bg][logo]overlay=(W-w)/2:(H-h)/2[centered];"
-        f"[centered]fade=t=in:st=0:d=0.4[vout]"
+        f"[centered]fade=t=in:st=0:d=0.2[vout]"  # Aggressive 0.2s fade-in
     )
 
     audio_inputs = ["-f", "lavfi", "-t", str(INTRO_DURATION), "-i", f"anullsrc=channel_layout=stereo:sample_rate=48000:d={INTRO_DURATION}"]
@@ -162,13 +163,12 @@ def render_outro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
         print(f"Warning: Logo not found at {LOGO_PATH}. Skipping outro card.")
         return False
 
-    # Block Glitch: scales down to chunky pixels, scales back up via nearest-neighbor, shifts RGB, adds noise
     vf = (
         f"color=c=black:s={TARGET_WIDTH}x{TARGET_HEIGHT}:d={OUTRO_DURATION}:r={TARGET_FPS}[bg];"
         f"[0:v]scale=eval=frame:w='2*trunc(360*(1.1-0.25*t/{OUTRO_DURATION}))':h=-2[logo];"
         f"[bg][logo]overlay=(W-w)/2:(H-h)/2[clean];"
         f"[clean]split[c1][c2];"
-        f"[c2]scale=iw/24:ih/24,scale=24*iw:24*ih:flags=neighbor,rgbashift=rh=35:bv=-35,noise=alls=25:allf=t+u[glitched];"
+        f"[c2]scale=iw/48:ih/48,scale=48*iw:48*ih:flags=neighbor,rgbashift=rh=35:bv=-35,noise=alls=25:allf=t+u[glitched];"
         f"[c1][glitched]overlay=enable='between(t,1.05,1.15)+between(t,1.3,1.42)+gte(t,1.6)'[gvid];"
         f"[gvid]fade=t=out:st=1.5:d=0.5[vout]"
     )

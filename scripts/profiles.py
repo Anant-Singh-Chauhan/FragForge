@@ -25,13 +25,13 @@ LOGO_PATH = Path("avlLogo_cropped.png")
 BGM_PATH = Path("CM_03 Cruise.mp3")
 GLITCH_SFX_PATH = Path("glitched_sound.mp3")
 
-INTRO_DURATION = 2.0
+INTRO_DURATION = 1.5        # Reduced by 25% (was 2.0)
 OUTRO_DURATION = 2.0
-INTRO_START_ZOOM = 2.0      # Starts at 2.0x zoom and zooms in
+INTRO_START_ZOOM = 2.0      # Starts at 2.0x zoom and zooms out
 GLITCH_VOLUME = 0.14        # Used for outro glitch sound
 
 BGM_START_TIMESTAMP = 12.0  # Seek offset into the MP3 track
-BGM_VOLUME = 0.075          # Reduced to half of 0.15
+BGM_VOLUME = 0.075          # Background music volume underneath gameplay
 BGM_FADE_DURATION = 1.5     # Fade in/out duration in seconds
 
 # =====================================================================
