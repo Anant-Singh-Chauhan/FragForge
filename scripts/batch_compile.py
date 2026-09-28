@@ -1,12 +1,13 @@
 """
-Batch Compile: Multi-Game Dynamic Compiler
-------------------------------------------
-1. Discovers clips strictly from immediate game folders (raw_clips/valo/, raw_clips/cs2/).
-2. Never enters nested subfolders (comp pistols, dump, etc.).
-3. Renders trimmed clips with HUD overlays to TRIMMED_DIR/<game_dir>_trim_YYYYMMDD_HHMMSS.mp4.
-4. Checks 56s Shorts budget per game with a 30s interactive timeout prompt.
-5. Compiles each game into its own Short: OUTPUT_DIR/<game_dir>_short_YYYYMMDD_HHMMSS.mp4.
-6. Archives source files to PROCESSED_DIR/<game_dir>/.
+Batch Compile: Multi-Game Dynamic Compiler with Intro, Outro & Sync-Locked BGM
+------------------------------------------------------------------------------
+1. Discovers clips strictly from configured game folders (shallow scan).
+2. Generates dynamic Intro (1.5x zoom-in, fade-in, softened glitch audio).
+3. Generates Outro (zoom-out, glitch flashes, fade-out, softened glitch audio).
+4. Renders trimmed clips with HUD overlays to output/trimmed/.
+5. Compiles sequence in a single complex filtergraph to prevent audio/video desync.
+6. Layers background music starting at 12s with fade-in and dynamic end fade-out.
+7. Archives processed raw clips into raw_clips/processed/<game>/.
 """
 
 from datetime import datetime
@@ -24,6 +25,16 @@ from profiles import (
     TRIMMED_DIR,
     PROCESSED_DIR,
     TEMP_DIR,
+    LOGO_PATH,
+    BGM_PATH,
+    GLITCH_SFX_PATH,
+    INTRO_DURATION,
+    OUTRO_DURATION,
+    INTRO_START_ZOOM,
+    GLITCH_VOLUME,
+    BGM_START_TIMESTAMP,
+    BGM_VOLUME,
+    BGM_FADE_DURATION,
     PROFILES,
     get_profile,
     identify_game,
@@ -45,7 +56,7 @@ GAP_SPEEDUP_THRESHOLD_SECONDS = 10.0
 SPEEDUP_FACTOR = 2.0
 SPEEDUP_EDGE_BUFFER_SECONDS = 2.0
 
-CONTENT_BUDGET_SECONDS = 60.0 - 2.0 - 2.0  # 56s total allowance
+CONTENT_BUDGET_SECONDS = 60.0 - INTRO_DURATION - OUTRO_DURATION
 CROSSFADE_SECONDS = 0.5
 
 
@@ -93,17 +104,12 @@ def get_video_info(ffprobe_exe: str, path: Path) -> Tuple[int, int, float]:
 
 
 def discover_clips_by_game() -> Dict[str, List[Path]]:
-    """
-    Shallow scan only. Inspects files directly inside raw_clips/<game>/
-    and never descends into subdirectories.
-    """
     exts = {".mp4", ".mkv", ".mov"}
     clips_by_game: Dict[str, List[Path]] = {k: [] for k in PROFILES}
 
     if not RAW_CLIPS_DIR.exists():
         return clips_by_game
 
-    # 1. Scan direct game folders (non-recursive)
     for key, prof in PROFILES.items():
         folder_names = {prof.get("dir_name", key)}
         folder_names.update(prof.get("folder_aliases", []))
@@ -112,12 +118,10 @@ def discover_clips_by_game() -> Dict[str, List[Path]]:
             subfolder = RAW_CLIPS_DIR / fname
             if subfolder.exists() and subfolder.is_dir():
                 for f in subfolder.iterdir():
-                    # Strictly check is_file to ignore subfolders like dump/
                     if f.is_file() and f.suffix.lower() in exts:
                         if f not in clips_by_game[key]:
                             clips_by_game[key].append(f)
 
-    # 2. Check root raw_clips/ directly (non-recursive)
     for f in RAW_CLIPS_DIR.iterdir():
         if f.is_file() and f.suffix.lower() in exts:
             game_key = identify_game(f)
@@ -125,6 +129,166 @@ def discover_clips_by_game() -> Dict[str, List[Path]]:
                 clips_by_game[game_key].append(f)
 
     return clips_by_game
+
+
+def render_intro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
+    if not LOGO_PATH.exists():
+        print(f"Warning: Logo not found at {LOGO_PATH}. Skipping intro card.")
+        return False
+
+    vf = (
+        f"color=c=black:s={TARGET_WIDTH}x{TARGET_HEIGHT}:d={INTRO_DURATION}:r={TARGET_FPS}[bg];"
+        f"[0:v]scale=eval=frame:w='2*trunc(360*({INTRO_START_ZOOM}-0.5*t/{INTRO_DURATION}))':h=-2[logo];"
+        f"[bg][logo]overlay=(W-w)/2:(H-h)/2[centered];"
+        f"[centered]fade=t=in:st=0:d=0.4[vout]"
+    )
+
+    if GLITCH_SFX_PATH.exists():
+        audio_inputs = ["-t", str(INTRO_DURATION), "-i", str(GLITCH_SFX_PATH)]
+        audio_filter = (
+            f"[1:a]volume={GLITCH_VOLUME},"
+            f"afade=t=in:st=0:d=0.4,"
+            f"afade=t=out:st={INTRO_DURATION-0.5}:d=0.5,"
+            f"apad,atrim=0:{INTRO_DURATION}[aout]"
+        )
+        audio_map = "[aout]"
+    else:
+        audio_inputs = ["-f", "lavfi", "-t", str(INTRO_DURATION), "-i",
+                        f"anoisesrc=d={INTRO_DURATION}:c=white:r=48000"]
+        audio_filter = (
+            f"[1:a]volume={GLITCH_VOLUME * 0.8},highpass=f=600,lowpass=f=4000,"
+            f"afade=t=in:st=0:d=0.4,afade=t=out:st={INTRO_DURATION-0.5}:d=0.5,"
+            f"apad,atrim=0:{INTRO_DURATION}[aout]"
+        )
+        audio_map = "[aout]"
+
+    cmd = [
+        ffmpeg_exe, "-loop", "1", "-t", str(INTRO_DURATION), "-i", str(LOGO_PATH),
+        *audio_inputs,
+        "-filter_complex", f"{vf};{audio_filter}",
+        "-map", "[vout]", "-map", audio_map,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-y", str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def render_outro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
+    if not LOGO_PATH.exists():
+        print(f"Warning: Logo not found at {LOGO_PATH}. Skipping outro card.")
+        return False
+
+    vf = (
+        f"color=c=black:s={TARGET_WIDTH}x{TARGET_HEIGHT}:d={OUTRO_DURATION}:r={TARGET_FPS}[bg];"
+        f"[0:v]scale=eval=frame:w='2*trunc(360*(1.1-0.25*t/{OUTRO_DURATION}))':h=-2[logo];"
+        f"[bg][logo]overlay=(W-w)/2:(H-h)/2[clean];"
+        f"[clean]split[c1][c2];"
+        f"[c2]rgbashift=rh=22:bv=-22,noise=alls=25:allf=t+u[glitched];"
+        f"[c1][glitched]overlay=enable='between(t,1.05,1.15)+between(t,1.3,1.42)+gte(t,1.6)'[gvid];"
+        f"[gvid]fade=t=out:st=1.5:d=0.5[vout]"
+    )
+
+    if GLITCH_SFX_PATH.exists():
+        audio_inputs = ["-t", str(OUTRO_DURATION), "-i", str(GLITCH_SFX_PATH)]
+        audio_filter = (
+            f"[1:a]volume={GLITCH_VOLUME},"
+            f"afade=t=out:st={OUTRO_DURATION-0.5}:d=0.5,"
+            f"apad,atrim=0:{OUTRO_DURATION}[aout]"
+        )
+        audio_map = "[aout]"
+    else:
+        audio_inputs = ["-f", "lavfi", "-t", str(OUTRO_DURATION), "-i",
+                        f"anoisesrc=d={OUTRO_DURATION}:c=white:r=48000"]
+        audio_filter = (
+            f"[1:a]volume={GLITCH_VOLUME * 0.8},highpass=f=600,lowpass=f=4000,"
+            f"volume=enable='between(t,1.05,1.15)+between(t,1.3,1.42)+gte(t,1.6)':volume=1,"
+            f"volume=enable='not(between(t,1.05,1.15)+between(t,1.3,1.42)+gte(t,1.6))':volume=0,"
+            f"afade=t=out:st={OUTRO_DURATION-0.5}:d=0.5,apad,atrim=0:{OUTRO_DURATION}[aout]"
+        )
+        audio_map = "[aout]"
+
+    cmd = [
+        ffmpeg_exe, "-loop", "1", "-t", str(OUTRO_DURATION), "-i", str(LOGO_PATH),
+        *audio_inputs,
+        "-filter_complex", f"{vf};{audio_filter}",
+        "-map", "[vout]", "-map", audio_map,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k", "-y", str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def compile_master_sequence(ffmpeg_exe: str, clips: List[Path], durations: List[float], output_path: Path) -> bool:
+    """
+    Combines crossfading and BGM layering into a single process.
+    Forces strict PTS normalization on audio streams before transitioning to prevent audio desync.
+    """
+    inputs = []
+    for clip in clips:
+        inputs.extend(["-i", str(clip)])
+    
+    has_bgm = BGM_PATH.exists()
+    if has_bgm:
+        inputs.extend(["-ss", str(BGM_START_TIMESTAMP), "-i", str(BGM_PATH)])
+    
+    bgm_idx = len(clips)
+    filter_parts = []
+
+    # 1. Normalize timestamps to 0 to prevent sync drift
+    for i in range(len(clips)):
+        filter_parts.append(f"[{i}:v]setpts=PTS-STARTPTS[v_n{i}]")
+        filter_parts.append(f"[{i}:a]asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0[a_n{i}]")
+    
+    running_offset = 0.0
+    prev_v = "v_n0"
+    prev_a = "a_n0"
+    
+    # 2. Apply Video & Audio crossfades sequentially
+    for i in range(1, len(clips)):
+        running_offset += durations[i - 1] - CROSSFADE_SECONDS
+        v_out, a_out = f"v_xf{i}", f"a_xf{i}"
+        
+        filter_parts.append(
+            f"[{prev_v}][v_n{i}]xfade=transition=fade:"
+            f"duration={CROSSFADE_SECONDS}:offset={running_offset:.3f}[{v_out}]"
+        )
+        filter_parts.append(f"[{prev_a}][a_n{i}]acrossfade=d={CROSSFADE_SECONDS}[{a_out}]")
+        
+        prev_v = v_out
+        prev_a = a_out
+        
+    final_v = prev_v
+    final_a = prev_a
+    master_dur = running_offset + durations[-1]
+    
+    # 3. Layer BGM globally underneath the entire assembled timeline
+    if has_bgm:
+        fade_out_start = max(0.0, master_dur - BGM_FADE_DURATION)
+        filter_parts.append(
+            f"[{bgm_idx}:a]volume={BGM_VOLUME},"
+            f"afade=t=in:st=0:d={BGM_FADE_DURATION},"
+            f"afade=t=out:st={fade_out_start:.3f}:d={BGM_FADE_DURATION}[bgm_faded]"
+        )
+        filter_parts.append(
+            f"[{final_a}][bgm_faded]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixed_a]"
+        )
+        final_a = "mixed_a"
+
+    cmd = [
+        ffmpeg_exe, *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", f"[{final_v}]", "-map", f"[{final_a}]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-y", str(output_path),
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  Compile FAILED: {result.stderr[-800:]}")
+        return False
+    return True
 
 
 def prompt_user_timeout(prompt: str, timeout: int = 30) -> bool:
@@ -268,37 +432,6 @@ def concat_pieces(ffmpeg_exe: str, piece_paths: List[Path], output_path: Path) -
     return result.returncode == 0
 
 
-def concat_with_crossfade(ffmpeg_exe: str, clips: List[Path], durations: List[float], output_path: Path) -> bool:
-    inputs = []
-    for clip in clips:
-        inputs += ["-i", str(clip)]
-
-    filter_parts = []
-    running_offset = 0.0
-    prev_video_label = "0:v"
-    prev_audio_label = "0:a"
-
-    for i in range(1, len(clips)):
-        running_offset += durations[i - 1] - CROSSFADE_SECONDS
-        v_out, a_out = f"v{i}", f"a{i}"
-        filter_parts.append(
-            f"[{prev_video_label}][{i}:v]xfade=transition=fade:"
-            f"duration={CROSSFADE_SECONDS}:offset={running_offset:.3f}[{v_out}]"
-        )
-        filter_parts.append(f"[{prev_audio_label}][{i}:a]acrossfade=d={CROSSFADE_SECONDS}[{a_out}]")
-        prev_video_label, prev_audio_label = v_out, a_out
-
-    cmd = [
-        ffmpeg_exe, *inputs,
-        "-filter_complex", ";".join(filter_parts),
-        "-map", f"[{prev_video_label}]", "-map", f"[{prev_audio_label}]",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k", "-y", str(output_path),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.returncode == 0
-
-
 def process_clip(ffmpeg_exe: str, ffprobe_exe: str, reader, clip: Path, output_path: Path, profile: dict) -> bool:
     src_w, src_h, duration = get_video_info(ffprobe_exe, clip)
     print(f"\nScanning kill-feed: {clip.name} [{profile['name']} - {src_w}x{src_h}]...")
@@ -392,26 +525,51 @@ def main():
 
         durations = [get_video_info(ffprobe_exe, p)[2] for p in stage_outputs]
         total_duration = sum(durations)
-        print(f"\n[{profile['name']}] Total combined duration: {total_duration:.1f}s (Budget: {CONTENT_BUDGET_SECONDS:.0f}s)")
+        print(f"\n[{profile['name']}] Total clips duration: {total_duration:.1f}s (Budget: {CONTENT_BUDGET_SECONDS:.0f}s)")
 
         should_compile = True
         if total_duration > CONTENT_BUDGET_SECONDS:
             warn_msg = (
-                f"WARNING: [{profile['name']}] Combined duration ({total_duration:.1f}s) "
-                f"exceeds your {CONTENT_BUDGET_SECONDS:.0f}s content budget!"
+                f"WARNING: [{profile['name']}] Combined clip duration ({total_duration:.1f}s) "
+                f"exceeds your {CONTENT_BUDGET_SECONDS:.0f}s allowance (leaving room for intro/outro)!"
             )
             should_compile = prompt_user_timeout(warn_msg, timeout=30)
 
         if should_compile:
+            print(f"\nRendering dynamic Intro & Outro cards...")
+            intro_path = TEMP_DIR / f"{game_dir_name}_intro.mp4"
+            outro_path = TEMP_DIR / f"{game_dir_name}_outro.mp4"
+
+            has_intro = render_intro_segment(ffmpeg_exe, intro_path)
+            has_outro = render_outro_segment(ffmpeg_exe, outro_path)
+
+            full_sequence = []
+            full_durations = []
+
+            if has_intro:
+                full_sequence.append(intro_path)
+                full_durations.append(INTRO_DURATION)
+
+            full_sequence.extend(stage_outputs)
+            full_durations.extend(durations)
+
+            if has_outro:
+                full_sequence.append(outro_path)
+                full_durations.append(OUTRO_DURATION)
+
             final_output = get_timestamped_path(OUTPUT_DIR, base_name=f"{game_dir_name}_short")
-            if len(stage_outputs) == 1:
-                shutil.copy(stage_outputs[0], final_output)
-                print(f"Single clip for {profile['name']} - copied directly to {final_output.name}")
+            
+            print(f"Stitching segments and syncing background music ({BGM_PATH.name})...")
+            if compile_master_sequence(ffmpeg_exe, full_sequence, full_durations, final_output):
+                print(f"Done [{profile['name']} Short]: {final_output.resolve()}")
             else:
-                if not concat_with_crossfade(ffmpeg_exe, stage_outputs, durations, final_output):
-                    print(f"Failed compiling {profile['name']} short.")
-                    continue
-            print(f"Done [{profile['name']} Short]: {final_output.resolve()}")
+                print(f"Failed compiling master sequence for {profile['name']}.")
+
+            # Cleanup temporary assembled assets
+            if has_intro:
+                intro_path.unlink(missing_ok=True)
+            if has_outro:
+                outro_path.unlink(missing_ok=True)
         else:
             print(f"[{profile['name']}] Skipping master compiled short. Preserving individual trimmed clips in {TRIMMED_DIR}.")
 

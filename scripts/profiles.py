@@ -1,8 +1,8 @@
 """
-Game Profiles & Directory Configuration
----------------------------------------
+Game Profiles & Media Configuration
+-----------------------------------
 Central configuration for all directory paths, game profiles, HUD coordinates,
-and folder identification rules.
+and brand media assets (logo, intro, outro, music, glitch SFX).
 """
 
 from pathlib import Path
@@ -19,23 +19,37 @@ PROCESSED_DIR = RAW_CLIPS_DIR / "processed"
 TEMP_DIR = Path("temp")
 
 # =====================================================================
+# Branding & Audio Assets
+# =====================================================================
+LOGO_PATH = Path("avlLogo_cropped.png")
+BGM_PATH = Path("CM_03 Cruise.mp3")
+GLITCH_SFX_PATH = Path("glitched_sound.mp3")
+
+INTRO_DURATION = 2.0
+OUTRO_DURATION = 2.0
+INTRO_START_ZOOM = 1.5      # Starts at 1.5x zoom and zooms out
+GLITCH_VOLUME = 0.14        # Reduced by 30% from 0.20
+
+BGM_START_TIMESTAMP = 12.0  # Seek offset into the MP3 track
+BGM_VOLUME = 0.15           # Reduced by 30% from 0.22
+BGM_FADE_DURATION = 1.5     # Fade in/out duration in seconds
+
+# =====================================================================
 # Game Profiles Configuration
 # =====================================================================
 PROFILES = {
     "valo": {
         "name": "VALO",
-        "dir_name": "valo",                           # Preferred folder name
-        "folder_aliases": ["valorant", "valo"],       # Discovers clips in raw_clips/valorant or raw_clips/valo
+        "dir_name": "valo",
+        "folder_aliases": ["valorant", "valo"],
         "player_name": "avalanche",
         "name_regex": re.compile(r"ava[l1|]anche", re.IGNORECASE),
         "latency_offset": 1.5,
         "lead_buffer": 5.0,
         "trail_buffer": 2.0,
-        # Normalized coordinates: (x1, y1, x2, y2)
         "killfeed_crop": (1350 / 1920, 90 / 1080, 1910 / 1920, 210 / 1080),
         "health_crop":   (525 / 1920, 1000 / 1080, 655 / 1920, 1050 / 1080),
         "ammo_crop":     (1267 / 1920, 1000 / 1080, 1397 / 1920, 1050 / 1080),
-        # Overlay sizes on 1080x1920 canvas
         "kf_overlay_w": 480,
         "hp_overlay_w": 220,
         "ammo_overlay_w": 220,
@@ -49,11 +63,9 @@ PROFILES = {
         "latency_offset": 1.0,
         "lead_buffer": 5.0,
         "trail_buffer": 2.5,
-        # Normalized coordinates based on CS2 HUD layout
         "killfeed_crop": (0.810, 0.050, 0.995, 0.160),
         "health_crop":   (0.315, 0.920, 0.395, 0.985),
         "ammo_crop":     (0.615, 0.920, 0.695, 0.985),
-        # Overlay sizes on 1080x1920 canvas
         "kf_overlay_w": 480,
         "hp_overlay_w": 220,
         "ammo_overlay_w": 220,
@@ -73,10 +85,6 @@ def get_profile(game_key: str) -> dict:
 
 
 def identify_game(clip_path: Path) -> Optional[str]:
-    """
-    Identifies game profile from immediate parent folder name or filename.
-    Returns None if clip does not match any profile.
-    """
     parent_name = clip_path.parent.name.lower()
     stem = clip_path.stem.lower()
 
@@ -84,11 +92,9 @@ def identify_game(clip_path: Path) -> Optional[str]:
         aliases = {prof.get("dir_name", key).lower()}
         aliases.update(a.lower() for a in prof.get("folder_aliases", []))
 
-        # 1. Immediate parent directory matches
         if parent_name in aliases:
             return key
 
-        # 2. File name matches (for loose clips in raw_clips/)
         for alias in aliases:
             if re.search(rf"\b{re.escape(alias)}\b", stem) or alias in stem:
                 return key
