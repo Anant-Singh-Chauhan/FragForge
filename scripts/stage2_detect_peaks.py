@@ -40,7 +40,6 @@ def detect_killfeed_peaks(reader, video_path: Path, profile: dict) -> Tuple[List
     duration = frame_count / fps if fps else 0.0
     step = max(1, int(fps * OCR_SAMPLE_INTERVAL_SECONDS))
 
-    # Convert normalized profile coordinates to clip pixels
     kx1_n, ky1_n, kx2_n, ky2_n = profile["killfeed_crop"]
     kx1, ky1 = int(kx1_n * width), int(ky1_n * height)
     kx2, ky2 = int(kx2_n * width), int(ky2_n * height)

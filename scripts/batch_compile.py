@@ -1,9 +1,12 @@
 """
-Batch Compile: Multi-Game (Valorant & CS2) Dynamic Compiler
-------------------------------------------------------------
-Automatically detects game profile from folder (raw_clips/valorant or raw_clips/cs2),
-scales normalized crops to any source resolution, renders blurred video background,
-and composites HUD overlays.
+Batch Compile: Multi-Game Dynamic Compiler
+------------------------------------------
+1. Discovers clips strictly from immediate game folders (raw_clips/valo/, raw_clips/cs2/).
+2. Never enters nested subfolders (comp pistols, dump, etc.).
+3. Renders trimmed clips with HUD overlays to TRIMMED_DIR/<game_dir>_trim_YYYYMMDD_HHMMSS.mp4.
+4. Checks 56s Shorts budget per game with a 30s interactive timeout prompt.
+5. Compiles each game into its own Short: OUTPUT_DIR/<game_dir>_short_YYYYMMDD_HHMMSS.mp4.
+6. Archives source files to PROCESSED_DIR/<game_dir>/.
 """
 
 from datetime import datetime
@@ -11,25 +14,29 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
-from profiles import get_profile
+from profiles import (
+    RAW_CLIPS_DIR,
+    OUTPUT_DIR,
+    TRIMMED_DIR,
+    PROCESSED_DIR,
+    TEMP_DIR,
+    PROFILES,
+    get_profile,
+    identify_game,
+)
 from stage2_detect_peaks import get_ocr_reader, detect_killfeed_peaks
-
-RAW_CLIPS_DIR = Path("raw_clips")
-PROCESSED_DIR = RAW_CLIPS_DIR / "processed"
-OUTPUT_DIR = Path("output")
-TRIMMED_DIR = OUTPUT_DIR / "trimmed"
-TEMP_DIR = Path("temp")
 
 TARGET_FPS = 60
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 ZOOM_OUT_FACTOR = 1.15
 
-VIDEO_BOTTOM_Y = 1795  # Active video boundary
-BOTTOM_PADDING = 36    # Margin above video edge
+VIDEO_BOTTOM_Y = 1795
+BOTTOM_PADDING = 36
 
 KF_OVERLAY_X = "W-w-24"
 KF_OVERLAY_Y = "300"
@@ -38,7 +45,7 @@ GAP_SPEEDUP_THRESHOLD_SECONDS = 10.0
 SPEEDUP_FACTOR = 2.0
 SPEEDUP_EDGE_BUFFER_SECONDS = 2.0
 
-CONTENT_BUDGET_SECONDS = 60.0 - 2.0 - 2.0  # 56s content allowance
+CONTENT_BUDGET_SECONDS = 60.0 - 2.0 - 2.0  # 56s total allowance
 CROSSFADE_SECONDS = 0.5
 
 
@@ -70,21 +77,94 @@ def get_video_info(ffprobe_exe: str, path: Path) -> Tuple[int, int, float]:
     cmd = [
         ffprobe_exe, "-v", "error",
         "-select_streams", "v:0",
-        "-show_entries", "stream=width,height:format=duration",
+        "-show_entries", "stream=width,height",
         "-of", "csv=s=x:p=0", str(path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    parts = result.stdout.strip().split("x")
-    width = int(parts[0])
-    height = int(parts[1].split()[0])
-    
+    parts = subprocess.run(cmd, capture_output=True, text=True).stdout.strip().split("x")
+    width, height = int(parts[0]), int(parts[1])
+
     cmd_dur = [
-        ffprobe_exe, "-v", "error", "-show_entries", "format=duration",
+        ffprobe_exe, "-v", "error",
+        "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", str(path),
     ]
-    res_dur = subprocess.run(cmd_dur, capture_output=True, text=True)
-    duration = float(res_dur.stdout.strip())
+    duration = float(subprocess.run(cmd_dur, capture_output=True, text=True).stdout.strip())
     return width, height, duration
+
+
+def discover_clips_by_game() -> Dict[str, List[Path]]:
+    """
+    Shallow scan only. Inspects files directly inside raw_clips/<game>/
+    and never descends into subdirectories.
+    """
+    exts = {".mp4", ".mkv", ".mov"}
+    clips_by_game: Dict[str, List[Path]] = {k: [] for k in PROFILES}
+
+    if not RAW_CLIPS_DIR.exists():
+        return clips_by_game
+
+    # 1. Scan direct game folders (non-recursive)
+    for key, prof in PROFILES.items():
+        folder_names = {prof.get("dir_name", key)}
+        folder_names.update(prof.get("folder_aliases", []))
+
+        for fname in folder_names:
+            subfolder = RAW_CLIPS_DIR / fname
+            if subfolder.exists() and subfolder.is_dir():
+                for f in subfolder.iterdir():
+                    # Strictly check is_file to ignore subfolders like dump/
+                    if f.is_file() and f.suffix.lower() in exts:
+                        if f not in clips_by_game[key]:
+                            clips_by_game[key].append(f)
+
+    # 2. Check root raw_clips/ directly (non-recursive)
+    for f in RAW_CLIPS_DIR.iterdir():
+        if f.is_file() and f.suffix.lower() in exts:
+            game_key = identify_game(f)
+            if game_key and f not in clips_by_game[game_key]:
+                clips_by_game[game_key].append(f)
+
+    return clips_by_game
+
+
+def prompt_user_timeout(prompt: str, timeout: int = 30) -> bool:
+    print(f"\n{prompt}")
+    print(f"Compile master Short anyway? (y/n) [Auto-skip in {timeout}s]: ", end="", flush=True)
+
+    if sys.platform == "win32":
+        try:
+            import msvcrt
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch().lower()
+                    print(ch)
+                    return ch == "y"
+                time.sleep(0.05)
+            print(f"\n[Timeout] {timeout}s elapsed without input. Proceeding with trimmed clips only.")
+            return False
+        except Exception:
+            pass
+
+    import threading
+    result = [False]
+
+    def get_input():
+        try:
+            ans = input().strip().lower()
+            result[0] = (ans == "y")
+        except Exception:
+            pass
+
+    t = threading.Thread(target=get_input, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+
+    if t.is_alive():
+        print(f"\n[Timeout] {timeout}s elapsed without input. Proceeding with trimmed clips only.")
+        return False
+
+    return result[0]
 
 
 def build_action_blocks(peaks: List[float], duration: float, lead: float, trail: float):
@@ -122,7 +202,6 @@ def build_pieces(action_blocks):
 
 
 def get_filtergraph(profile: dict, src_w: int, src_h: int) -> str:
-    # Scale normalized fractions to exact source pixels
     def to_rect(norm_box):
         x1, y1, x2, y2 = norm_box
         return int(x1 * src_w), int(y1 * src_h), int((x2 - x1) * src_w), int((y2 - y1) * src_h)
@@ -220,32 +299,17 @@ def concat_with_crossfade(ffmpeg_exe: str, clips: List[Path], durations: List[fl
     return result.returncode == 0
 
 
-def identify_game(clip_path: Path) -> str:
-    parent = clip_path.parent.name.lower()
-    if "cs2" in parent or "counter" in parent:
-        return "cs2"
-    if "val" in parent:
-        return "valorant"
-    # Fallback to clip name search
-    name = clip_path.name.lower()
-    if "cs2" in name or "counter" in name:
-        return "cs2"
-    return "valorant"
-
-
-def process_clip(ffmpeg_exe: str, ffprobe_exe: str, reader, clip: Path, output_path: Path) -> bool:
-    game_key = identify_game(clip)
-    profile = get_profile(game_key)
+def process_clip(ffmpeg_exe: str, ffprobe_exe: str, reader, clip: Path, output_path: Path, profile: dict) -> bool:
     src_w, src_h, duration = get_video_info(ffprobe_exe, clip)
-
-    print(f"\nProcessing {clip.name} [{profile['name']} - {src_w}x{src_h}]...")
+    print(f"\nScanning kill-feed: {clip.name} [{profile['name']} - {src_w}x{src_h}]...")
     peaks, _ = detect_killfeed_peaks(reader, clip, profile)
 
     if not peaks:
-        print("  No kills detected - skipping clip.")
-        return False
+        print("  [Notice] No kills detected via OCR - exporting full clip as fallback.")
+        action_blocks = [(0.0, duration)]
+    else:
+        action_blocks = build_action_blocks(peaks, duration, profile["lead_buffer"], profile["trail_buffer"])
 
-    action_blocks = build_action_blocks(peaks, duration, profile["lead_buffer"], profile["trail_buffer"])
     pieces = build_pieces(action_blocks)
     vf = get_filtergraph(profile, src_w, src_h)
 
@@ -273,6 +337,11 @@ def process_clip(ffmpeg_exe: str, ffprobe_exe: str, reader, clip: Path, output_p
     return ok
 
 
+def natural_sort_key(path: Path):
+    match = re.match(r"^(\d+)", path.stem)
+    return int(match.group(1)) if match else float("inf")
+
+
 def main():
     ffmpeg_exe = resolve_tool("ffmpeg")
     ffprobe_exe = resolve_tool("ffprobe")
@@ -282,58 +351,79 @@ def main():
     TEMP_DIR.mkdir(exist_ok=True)
     PROCESSED_DIR.mkdir(exist_ok=True)
 
-    # Automatically scan root raw_clips, raw_clips/valorant, and raw_clips/cs2
-    exts = {".mp4", ".mkv", ".mov"}
-    search_dirs = [RAW_CLIPS_DIR, RAW_CLIPS_DIR / "valorant", RAW_CLIPS_DIR / "cs2"]
-    raw_clips = []
-    for d in search_dirs:
-        if d.exists():
-            raw_clips.extend([f for f in d.iterdir() if f.is_file() and f.suffix.lower() in exts])
+    clips_by_game = discover_clips_by_game()
+    total_found = sum(len(c) for c in clips_by_game.values())
 
-    if not raw_clips:
-        print(f"No video files found in {RAW_CLIPS_DIR} (checked valorant/ and cs2/ subfolders).")
+    if total_found == 0:
+        print(f"No video files found in configured game directories under {RAW_CLIPS_DIR}.")
         sys.exit(0)
 
-    print(f"Found {len(raw_clips)} clip(s) to process:")
-    for c in raw_clips:
-        print(f"  [{identify_game(c).upper()}] {c.name}")
+    print(f"Found {total_found} clip(s) to process:")
+    for game_key, clips in clips_by_game.items():
+        if clips:
+            print(f"  [{game_key.upper()}]: {len(clips)} clip(s)")
+            clips.sort(key=natural_sort_key)
 
     reader = get_ocr_reader()
 
-    stage_outputs = []
-    successful_clips = []
+    for game_key, clips in clips_by_game.items():
+        if not clips:
+            continue
 
-    for clip in raw_clips:
-        out_path = get_timestamped_path(TRIMMED_DIR, base_name="trim")
-        if process_clip(ffmpeg_exe, ffprobe_exe, reader, clip, out_path):
-            stage_outputs.append(out_path)
-            successful_clips.append(clip)
+        profile = get_profile(game_key)
+        game_dir_name = profile.get("dir_name", game_key)
 
-    if not stage_outputs:
-        print("\nNo clips were successfully processed. Stopping.")
-        sys.exit(1)
+        print(f"\n=======================================================")
+        print(f"  PROCESSING BATCH: {profile['name']} ({len(clips)} clip(s))")
+        print(f"=======================================================")
 
-    durations = [get_video_info(ffprobe_exe, p)[2] for p in stage_outputs]
-    total_duration = sum(durations)
-    print(f"\nTotal combined duration: {total_duration:.1f}s (budget: {CONTENT_BUDGET_SECONDS:.0f}s)")
+        stage_outputs = []
+        successful_clips = []
 
-    if total_duration > CONTENT_BUDGET_SECONDS:
-        print(f"WARNING: clips total {total_duration:.1f}s, over budget ({CONTENT_BUDGET_SECONDS:.0f}s).")
+        for clip in clips:
+            out_path = get_timestamped_path(TRIMMED_DIR, base_name=f"{game_dir_name}_trim")
+            if process_clip(ffmpeg_exe, ffprobe_exe, reader, clip, out_path, profile):
+                stage_outputs.append(out_path)
+                successful_clips.append(clip)
 
-    final_output = get_timestamped_path(OUTPUT_DIR, base_name="short")
-    if len(stage_outputs) == 1:
-        shutil.copy(stage_outputs[0], final_output)
-        print(f"Single clip - copied directly to {final_output.name}")
-    else:
-        if not concat_with_crossfade(ffmpeg_exe, stage_outputs, durations, final_output):
-            sys.exit(1)
+        if not stage_outputs:
+            print(f"No clips were successfully processed for {profile['name']}. Moving to next game.")
+            continue
 
-    for clip in successful_clips:
-        dest = PROCESSED_DIR / clip.name
-        shutil.move(str(clip), str(dest))
+        durations = [get_video_info(ffprobe_exe, p)[2] for p in stage_outputs]
+        total_duration = sum(durations)
+        print(f"\n[{profile['name']}] Total combined duration: {total_duration:.1f}s (Budget: {CONTENT_BUDGET_SECONDS:.0f}s)")
 
-    print(f"\nArchived {len(successful_clips)} clip(s) to {PROCESSED_DIR}")
-    print(f"Done: {final_output}")
+        should_compile = True
+        if total_duration > CONTENT_BUDGET_SECONDS:
+            warn_msg = (
+                f"WARNING: [{profile['name']}] Combined duration ({total_duration:.1f}s) "
+                f"exceeds your {CONTENT_BUDGET_SECONDS:.0f}s content budget!"
+            )
+            should_compile = prompt_user_timeout(warn_msg, timeout=30)
+
+        if should_compile:
+            final_output = get_timestamped_path(OUTPUT_DIR, base_name=f"{game_dir_name}_short")
+            if len(stage_outputs) == 1:
+                shutil.copy(stage_outputs[0], final_output)
+                print(f"Single clip for {profile['name']} - copied directly to {final_output.name}")
+            else:
+                if not concat_with_crossfade(ffmpeg_exe, stage_outputs, durations, final_output):
+                    print(f"Failed compiling {profile['name']} short.")
+                    continue
+            print(f"Done [{profile['name']} Short]: {final_output.resolve()}")
+        else:
+            print(f"[{profile['name']}] Skipping master compiled short. Preserving individual trimmed clips in {TRIMMED_DIR}.")
+
+        game_archive_dir = PROCESSED_DIR / game_dir_name
+        game_archive_dir.mkdir(parents=True, exist_ok=True)
+        for clip in successful_clips:
+            dest = game_archive_dir / clip.name
+            shutil.move(str(clip), str(dest))
+
+        print(f"Archived {len(successful_clips)} {profile['name']} clip(s) to {game_archive_dir}")
+
+    print("\nAll batches completed.")
 
 
 if __name__ == "__main__":
