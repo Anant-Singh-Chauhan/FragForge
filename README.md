@@ -206,7 +206,7 @@ For solutions regarding:
 - YouTube Shorts duration limits
 - Audio synchronization and encoding errors
 
-Consult [faq.md](faq.md) for detailed diagnostics and solutions.
+Consult [faq.md](FAQs.md) for detailed diagnostics and solutions.
 
 ---
 
