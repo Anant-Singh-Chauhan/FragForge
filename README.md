@@ -115,7 +115,7 @@ Launch the application using the launcher script:
 
 ---
 
-## Directory Structure
+## Pipeline Architecture
 
 ```text
 FragForge/
