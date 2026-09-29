@@ -44,11 +44,6 @@ echo [*] Checking hardware capabilities...
 nvidia-smi >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     set HAS_NVIDIA=1
-    for /f "skip=8 tokens=1-3" %%a in ('nvidia-smi 2^>^&1') do (
-        if not defined GPU_NAME (
-            set GPU_NAME=%%a %%b %%c
-        )
-    )
     echo [OK] Dedicated NVIDIA GPU detected via nvidia-smi.
 ) else (
     set HAS_NVIDIA=0
@@ -148,7 +143,8 @@ if not exist "raw_clips\processed\cs2" mkdir "raw_clips\processed\cs2"
 if not exist "output\trimmed" mkdir "output\trimmed"
 if not exist "temp" mkdir "temp"
 if not exist "assets\branding" mkdir "assets\branding"
-echo [OK] Folder scaffolding verified (raw_clips, output, temp, assets).
+if not exist "assets\public" mkdir "assets\public"
+echo [OK] Folder scaffolding verified (raw_clips, output, temp, assets/public).
 
 echo.
 echo ========================================================

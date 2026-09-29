@@ -8,9 +8,10 @@ Standalone desktop GUI with integrated tabs:
   4. ⚙ Config      : In-app JSON editor with live syntax validation and saving
 
 Requires:
-  pip install customtkinter
+  pip install customtkinter pillow
 """
 
+import ctypes
 from datetime import datetime
 import json
 import os
@@ -24,6 +25,16 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
+from PIL import Image, ImageTk
+
+# Force Windows to treat FragForge as its own application on the Taskbar
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "fragforge.shortsengine.desktop.1.0"
+        )
+    except Exception:
+        pass
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 RAW_CLIPS_DIR = PROJECT_ROOT / "raw_clips"
@@ -32,6 +43,14 @@ TRIMMED_DIR = OUTPUT_DIR / "trimmed"
 CONFIG_PATH = PROJECT_ROOT / "config.json"
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 BATCH_SCRIPT = SCRIPTS_DIR / "batch_compile.py"
+
+# Public & Branding Asset Directories
+PUBLIC_ASSETS_DIR = PROJECT_ROOT / "assets" / "public"
+BRANDING_DIR = PROJECT_ROOT / "assets" / "branding"
+
+# Primary App Icons
+APP_ICON_ICO = PUBLIC_ASSETS_DIR / "appIcon.ico"
+APP_ICON_PNG = PUBLIC_ASSETS_DIR / "appIcon.png"
 
 # --- Tactical Palette ---
 COLOR_BG = "#15161c"
@@ -72,6 +91,9 @@ class FragForgeApp(ctk.CTk):
         self.minsize(880, 600)
         self.configure(fg_color=COLOR_BG)
 
+        # Apply Windows titlebar and taskbar application icons
+        self._set_app_icon()
+
         self.log_queue = queue.Queue()
         self.is_running = False
         self.process = None
@@ -85,6 +107,34 @@ class FragForgeApp(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    # -------------------------------------------------------- Window Icon ---
+
+    def _set_app_icon(self):
+        """Sets the native Windows icon for the Titlebar, Taskbar, and Alt+Tab."""
+        # 1. Primary: Load native Windows multi-res .ico from assets/public/appIcon.ico
+        if APP_ICON_ICO.exists():
+            try:
+                self.iconbitmap(str(APP_ICON_ICO.resolve()))
+                return
+            except Exception:
+                pass
+
+        # 2. Fallback: Load PNG if .ico is unavailable
+        png_candidates = [
+            APP_ICON_PNG,
+            PUBLIC_ASSETS_DIR / "logo.png",
+            BRANDING_DIR / "app_logo.png",
+        ]
+        for p in png_candidates:
+            if p.exists():
+                try:
+                    pil_img = Image.open(p)
+                    self._taskbar_icon_ref = ImageTk.PhotoImage(pil_img)
+                    self.wm_iconphoto(True, self._taskbar_icon_ref)
+                    break
+                except Exception:
+                    pass
+
     # ---------------------------------------------------------------- UI ---
 
     def _build_ui(self):
@@ -92,7 +142,35 @@ class FragForgeApp(ctk.CTk):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(16, 4))
 
-        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        brand_cluster = ctk.CTkFrame(header, fg_color="transparent")
+        brand_cluster.pack(side="left")
+
+        # In-App Visual Logo
+        logo_path = None
+        for candidate in [
+            APP_ICON_PNG,
+            APP_ICON_ICO,
+            PUBLIC_ASSETS_DIR / "logo.png",
+            BRANDING_DIR / "app_logo.png",
+        ]:
+            if candidate.exists():
+                logo_path = candidate
+                break
+
+        if logo_path:
+            try:
+                pil_logo = Image.open(logo_path)
+                self.header_logo = ctk.CTkImage(
+                    light_image=pil_logo,
+                    dark_image=pil_logo,
+                    size=(40, 40)
+                )
+                logo_label = ctk.CTkLabel(brand_cluster, image=self.header_logo, text="")
+                logo_label.pack(side="left", padx=(0, 12))
+            except Exception:
+                pass
+
+        title_box = ctk.CTkFrame(brand_cluster, fg_color="transparent")
         title_box.pack(side="left")
 
         ctk.CTkLabel(
@@ -129,7 +207,6 @@ class FragForgeApp(ctk.CTk):
     # --------------------------------------------------------- Tab 1: Forge ---
 
     def _build_tab_forge(self):
-        # 1. Control Card
         card = ctk.CTkFrame(self.tab_forge, fg_color=COLOR_CARD, corner_radius=12, border_width=1, border_color=COLOR_BORDER)
         card.pack(fill="x", pady=(8, 10))
 
@@ -141,7 +218,6 @@ class FragForgeApp(ctk.CTk):
             font=("Segoe UI", 10, "bold"),
         ).grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 10))
 
-        # Row 1: Target game, auto-compile toggle, action buttons
         row1 = ctk.CTkFrame(inner, fg_color="transparent")
         row1.grid(row=1, column=0, columnspan=6, sticky="ew")
         row1.columnconfigure(2, weight=1)
@@ -178,7 +254,6 @@ class FragForgeApp(ctk.CTk):
             border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=95,
         ).grid(row=0, column=4)
 
-        # Row 2: Status Badges + Shortcut to Raw Clips Tab
         row2 = ctk.CTkFrame(inner, fg_color="transparent")
         row2.grid(row=2, column=0, columnspan=6, sticky="w", pady=(12, 0))
 
@@ -199,7 +274,6 @@ class FragForgeApp(ctk.CTk):
             command=lambda: self.tabview.set("📹  Raw Clips")
         ).pack(side="left")
 
-        # 2. Forge Action Button
         self.run_btn = ctk.CTkButton(
             self.tab_forge, text="▶    Forge Shorts Batch", command=self.start_pipeline,
             fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, text_color="#ffffff",
@@ -207,7 +281,6 @@ class FragForgeApp(ctk.CTk):
         )
         self.run_btn.pack(fill="x", pady=(2, 10))
 
-        # 3. Live Console Card
         console_card = ctk.CTkFrame(self.tab_forge, fg_color=COLOR_CARD, corner_radius=12, border_width=1, border_color=COLOR_BORDER)
         console_card.pack(fill="both", expand=True)
 
@@ -656,7 +729,6 @@ class FragForgeApp(ctk.CTk):
         if self.auto_yes_var.get():
             cmd.append("--yes")
 
-        # Explicitly enforce UTF-8 IO encoding on Windows
         sub_env = os.environ.copy()
         sub_env["PYTHONIOENCODING"] = "utf-8"
 

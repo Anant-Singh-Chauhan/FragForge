@@ -65,3 +65,6 @@ ehthumbs.db
 ehthumbs_vista.db
 [Dd]esktop.ini
 .DS_Store
+
+# --- app icon generator ---
+scripts/generate_app_logo*.py
