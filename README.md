@@ -1,4 +1,4 @@
-# Automated Game-Clip Shorts Pipeline
+# FragForge : Automated Game-Clip Shorts Pipeline
 
 An automated video compilation engine designed to transform widescreen 16:9 gameplay recordings (VALORANT and Counter-Strike 2) into vertical 9:16 YouTube Shorts. The pipeline features GPU-accelerated OCR killfeed scanning, dead-time speed-ramping, resolution-independent HUD re-mapping, dynamic branding transitions, and sync-locked audio mixing.
 
