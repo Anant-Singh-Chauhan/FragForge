@@ -1,0 +1,21 @@
+# Auto-detect text files and normalize line endings to LF on commit
+* text=auto
+
+# Ensure batch files and PowerShell scripts retain Windows CRLF line endings
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Ensure Python and configuration files use LF
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+# Binary media files must not be touched by Git line conversion
+*.ico binary
+*.png binary
+*.jpg binary
+*.mp3 binary
+*.mp4 binary
+*.mkv binary
