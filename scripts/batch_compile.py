@@ -56,6 +56,14 @@ GAP_SPEEDUP_THRESHOLD_SECONDS = 10.0
 SPEEDUP_FACTOR = 2.0
 SPEEDUP_EDGE_BUFFER_SECONDS = 2.0
 
+# Suppress console windows on Windows for child FFmpeg/FFprobe processes
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+def run_quiet_process(cmd: list, **kwargs) -> subprocess.CompletedProcess:
+    """Wrapper around subprocess.run that suppresses pop-up console windows on Windows."""
+    return subprocess.run(cmd, creationflags=NO_WINDOW, **kwargs)
+
 
 def get_timestamped_path(target_dir: Path, base_name: str, ext: str = ".mp4") -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -88,7 +96,7 @@ def get_video_info(ffprobe_exe: str, path: Path) -> Tuple[int, int, float]:
         "-show_entries", "stream=width,height",
         "-of", "csv=s=x:p=0", str(path),
     ]
-    parts = subprocess.run(cmd, capture_output=True, text=True).stdout.strip().split("x")
+    parts = run_quiet_process(cmd, capture_output=True, text=True).stdout.strip().split("x")
     width, height = int(parts[0]), int(parts[1])
 
     cmd_dur = [
@@ -96,7 +104,7 @@ def get_video_info(ffprobe_exe: str, path: Path) -> Tuple[int, int, float]:
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", str(path),
     ]
-    duration = float(subprocess.run(cmd_dur, capture_output=True, text=True).stdout.strip())
+    duration = float(run_quiet_process(cmd_dur, capture_output=True, text=True).stdout.strip())
     return width, height, duration
 
 
@@ -154,7 +162,7 @@ def render_intro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
         "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-y", str(output_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_quiet_process(cmd, capture_output=True, text=True)
     return result.returncode == 0
 
 
@@ -199,7 +207,7 @@ def render_logo_outro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
         "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-y", str(output_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_quiet_process(cmd, capture_output=True, text=True)
     return result.returncode == 0
 
 
@@ -224,7 +232,7 @@ def prepare_subs_segment(ffmpeg_exe: str, ffprobe_exe: str, output_path: Path) -
         "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
         "-y", str(output_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_quiet_process(cmd, capture_output=True, text=True)
     return result.returncode == 0, duration
 
 
@@ -285,7 +293,7 @@ def compile_master_sequence(ffmpeg_exe: str, clips: List[Path], durations: List[
         "-c:a", "aac", "-b:a", "192k", "-y", str(output_path),
     ]
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_quiet_process(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  Compile FAILED: {result.stderr[-800:]}", flush=True)
         return False
@@ -404,7 +412,7 @@ def export_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, vf: st
         "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k", "-y", str(out_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_quiet_process(cmd, capture_output=True, text=True)
     return result.returncode == 0
 
 
@@ -421,7 +429,7 @@ def export_sped_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, v
         "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k", "-y", str(out_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_quiet_process(cmd, capture_output=True, text=True)
     return result.returncode == 0
 
 
@@ -432,7 +440,7 @@ def concat_pieces(ffmpeg_exe: str, piece_paths: List[Path], output_path: Path) -
             f.write(f"file '{p.resolve().as_posix()}'\n")
 
     cmd = [ffmpeg_exe, "-f", "concat", "-safe", "0", "-i", str(filelist_path), "-c", "copy", "-y", str(output_path)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_quiet_process(cmd, capture_output=True, text=True)
     filelist_path.unlink(missing_ok=True)
     return result.returncode == 0
 
@@ -481,7 +489,7 @@ def natural_sort_key(path: Path):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="LocalYt Batch Compiler")
+    parser = argparse.ArgumentParser(description="FragForge Batch Compiler")
     parser.add_argument(
         "--game",
         type=str,

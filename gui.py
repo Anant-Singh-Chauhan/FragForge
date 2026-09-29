@@ -230,7 +230,6 @@ class FragForgeApp(ctk.CTk):
     # ----------------------------------------------------- Tab 2: Raw Clips ---
 
     def _build_tab_raw(self):
-        # Action Toolbar
         bar = ctk.CTkFrame(self.tab_raw, fg_color="transparent")
         bar.pack(fill="x", pady=(6, 10))
 
@@ -239,7 +238,6 @@ class FragForgeApp(ctk.CTk):
             font=("Segoe UI", 10, "bold")
         ).pack(side="left", padx=4)
 
-        # Game Filter Switcher
         self.raw_filter_var = tk.StringVar(value="All")
         self.raw_filter = ctk.CTkSegmentedButton(
             bar, values=["All", "VALORANT", "CS2"],
@@ -268,7 +266,6 @@ class FragForgeApp(ctk.CTk):
             border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=95,
         ).pack(side="right")
 
-        # Scrollable container for raw video clips
         self.raw_scroll = ctk.CTkScrollableFrame(
             self.tab_raw, fg_color=COLOR_CARD, corner_radius=12,
             border_width=1, border_color=COLOR_BORDER
@@ -282,7 +279,6 @@ class FragForgeApp(ctk.CTk):
         exts = {".mp4", ".mov", ".mkv"}
         items = []
 
-        # Scrape VALORANT clips (shallow scan)
         for fld in ["valo", "valorant"]:
             p = RAW_CLIPS_DIR / fld
             if p.exists() and p.is_dir():
@@ -290,7 +286,6 @@ class FragForgeApp(ctk.CTk):
                     if f.is_file() and f.suffix.lower() in exts and f not in [i[0] for i in items]:
                         items.append((f, "VALORANT", COLOR_VALO))
 
-        # Scrape CS2 clips (shallow scan)
         for fld in ["cs2", "cs", "counter-strike"]:
             p = RAW_CLIPS_DIR / fld
             if p.exists() and p.is_dir():
@@ -330,7 +325,6 @@ class FragForgeApp(ctk.CTk):
         title_line = ctk.CTkFrame(info_box, fg_color="transparent")
         title_line.pack(anchor="w")
 
-        # Game Badge Indicator
         ctk.CTkLabel(
             title_line, text=f" {game_tag} ", text_color=tag_color,
             fg_color=COLOR_CARD, corner_radius=4, font=("Segoe UI", 10, "bold")
@@ -344,7 +338,6 @@ class FragForgeApp(ctk.CTk):
             font=("Segoe UI", 10), text_color=COLOR_SUBTEXT
         ).pack(anchor="w", pady=(2, 0))
 
-        # Action Buttons
         btn_box = ctk.CTkFrame(row, fg_color="transparent")
         btn_box.pack(side="right", padx=10, pady=8)
 
@@ -390,7 +383,6 @@ class FragForgeApp(ctk.CTk):
     # ------------------------------------------------------- Tab 3: Exports ---
 
     def _build_tab_exports(self):
-        # Action Toolbar
         bar = ctk.CTkFrame(self.tab_exports, fg_color="transparent")
         bar.pack(fill="x", pady=(6, 10))
 
@@ -411,7 +403,6 @@ class FragForgeApp(ctk.CTk):
             border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=110,
         ).pack(side="right")
 
-        # Scrollable container for video files
         self.exports_scroll = ctk.CTkScrollableFrame(
             self.tab_exports, fg_color=COLOR_CARD, corner_radius=12,
             border_width=1, border_color=COLOR_BORDER
@@ -695,8 +686,8 @@ class FragForgeApp(ctk.CTk):
                     self.is_running = False
                     self.run_btn.configure(state="normal", text="▶    Forge Shorts Batch")
                     self.scan_staged_clips()
-                    self.refresh_raw_clips()  # Updates raw clips view as files move to processed
-                    self.refresh_exports()    # Updates exports tab with new Shorts
+                    self.refresh_raw_clips()
+                    self.refresh_exports()
                 else:
                     self._append_log(msg)
         except queue.Empty:
