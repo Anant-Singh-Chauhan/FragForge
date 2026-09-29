@@ -3,8 +3,9 @@ FragForge — Automated Tactical Shorts Engine
 --------------------------------------------
 Standalone desktop GUI with integrated tabs:
   1. ⚡ Forge       : Live pipeline execution, clip staging, and terminal console
-  2. 📁 Exports     : In-app video file browser (Play, Reveal in Explorer, Delete)
-  3. ⚙ Config      : In-app JSON editor with live syntax validation and saving
+  2. 📹 Raw Clips   : In-app browser for staged clips (Play, Reveal, Filter, Delete)
+  3. 📁 Exports     : In-app video browser for completed Shorts and trimmed pieces
+  4. ⚙ Config      : In-app JSON editor with live syntax validation and saving
 
 Requires:
   pip install customtkinter
@@ -43,6 +44,8 @@ COLOR_BORDER = "#2a2d3a"
 COLOR_SUCCESS = "#98c379"
 COLOR_ERROR = "#e06c75"
 COLOR_CONSOLE_BG = "#0e0f13"
+COLOR_VALO = "#ff4655"
+COLOR_CS2 = "#f2a900"
 
 ctk.set_appearance_mode("dark")
 
@@ -65,8 +68,8 @@ class FragForgeApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("FragForge — Automated Tactical Shorts Engine")
-        self.geometry("960x740")
-        self.minsize(860, 600)
+        self.geometry("980x750")
+        self.minsize(880, 600)
         self.configure(fg_color=COLOR_BG)
 
         self.log_queue = queue.Queue()
@@ -75,6 +78,7 @@ class FragForgeApp(ctk.CTk):
 
         self._build_ui()
         self.scan_staged_clips()
+        self.refresh_raw_clips()
         self.refresh_exports()
         self.load_config_to_editor()
         self.after(100, self._process_log_queue)
@@ -113,10 +117,12 @@ class FragForgeApp(ctk.CTk):
         self.tabview.pack(fill="both", expand=True, padx=20, pady=(6, 16))
 
         self.tab_forge = self.tabview.add("⚡  Forge")
+        self.tab_raw = self.tabview.add("📹  Raw Clips")
         self.tab_exports = self.tabview.add("📁  Exports")
         self.tab_config = self.tabview.add("⚙  Configuration")
 
         self._build_tab_forge()
+        self._build_tab_raw()
         self._build_tab_exports()
         self._build_tab_config()
 
@@ -135,7 +141,7 @@ class FragForgeApp(ctk.CTk):
             font=("Segoe UI", 10, "bold"),
         ).grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 10))
 
-        # Row 1: target game, auto-yes, buttons
+        # Row 1: Target game, auto-compile toggle, action buttons
         row1 = ctk.CTkFrame(inner, fg_color="transparent")
         row1.grid(row=1, column=0, columnspan=6, sticky="ew")
         row1.columnconfigure(2, weight=1)
@@ -172,7 +178,7 @@ class FragForgeApp(ctk.CTk):
             border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=95,
         ).grid(row=0, column=4)
 
-        # Row 2: Status Badges
+        # Row 2: Status Badges + Shortcut to Raw Clips Tab
         row2 = ctk.CTkFrame(inner, fg_color="transparent")
         row2.grid(row=2, column=0, columnspan=6, sticky="w", pady=(12, 0))
 
@@ -180,11 +186,18 @@ class FragForgeApp(ctk.CTk):
             side="left", padx=(0, 10)
         )
 
-        self.badge_valo = Badge(row2, "VALORANT", "#ff4655")
+        self.badge_valo = Badge(row2, "VALORANT", COLOR_VALO)
         self.badge_valo.pack(side="left", padx=(0, 8))
 
-        self.badge_cs2 = Badge(row2, "CS2", "#f2a900")
-        self.badge_cs2.pack(side="left")
+        self.badge_cs2 = Badge(row2, "CS2", COLOR_CS2)
+        self.badge_cs2.pack(side="left", padx=(0, 12))
+
+        ctk.CTkButton(
+            row2, text="👁 View Staged", width=105, height=26,
+            fg_color=COLOR_BG, hover_color=COLOR_BORDER, text_color=COLOR_TEXT,
+            border_width=1, border_color=COLOR_BORDER, corner_radius=13, font=("Segoe UI", 11),
+            command=lambda: self.tabview.set("📹  Raw Clips")
+        ).pack(side="left")
 
         # 2. Forge Action Button
         self.run_btn = ctk.CTkButton(
@@ -214,7 +227,167 @@ class FragForgeApp(ctk.CTk):
         self.log_text.tag_config("error", foreground=COLOR_ERROR)
         self.log_text.tag_config("muted", foreground=COLOR_SUBTEXT)
 
-    # ------------------------------------------------------- Tab 2: Exports ---
+    # ----------------------------------------------------- Tab 2: Raw Clips ---
+
+    def _build_tab_raw(self):
+        # Action Toolbar
+        bar = ctk.CTkFrame(self.tab_raw, fg_color="transparent")
+        bar.pack(fill="x", pady=(6, 10))
+
+        ctk.CTkLabel(
+            bar, text="STAGED RAW FOOTAGE", text_color=COLOR_SUBTEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack(side="left", padx=4)
+
+        # Game Filter Switcher
+        self.raw_filter_var = tk.StringVar(value="All")
+        self.raw_filter = ctk.CTkSegmentedButton(
+            bar, values=["All", "VALORANT", "CS2"],
+            variable=self.raw_filter_var,
+            command=lambda _: self.refresh_raw_clips(),
+            selected_color=COLOR_ACCENT, selected_hover_color=COLOR_ACCENT_HOVER,
+            corner_radius=8
+        )
+        self.raw_filter.pack(side="left", padx=16)
+
+        ctk.CTkButton(
+            bar, text="📂 Open Folder", command=self.open_raw_folder,
+            fg_color=COLOR_CARD, hover_color=COLOR_BORDER, text_color=COLOR_TEXT,
+            border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=120,
+        ).pack(side="right", padx=(6, 0))
+
+        ctk.CTkButton(
+            bar, text="+ Stage Clip(s)", command=self.stage_new_clips,
+            fg_color=COLOR_CARD, hover_color=COLOR_BORDER, text_color=COLOR_TEXT,
+            border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=120,
+        ).pack(side="right", padx=(6, 0))
+
+        ctk.CTkButton(
+            bar, text="🔄  Refresh", command=self.refresh_raw_clips,
+            fg_color=COLOR_CARD, hover_color=COLOR_BORDER, text_color=COLOR_TEXT,
+            border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=95,
+        ).pack(side="right")
+
+        # Scrollable container for raw video clips
+        self.raw_scroll = ctk.CTkScrollableFrame(
+            self.tab_raw, fg_color=COLOR_CARD, corner_radius=12,
+            border_width=1, border_color=COLOR_BORDER
+        )
+        self.raw_scroll.pack(fill="both", expand=True, pady=(0, 6))
+
+    def refresh_raw_clips(self):
+        for widget in self.raw_scroll.winfo_children():
+            widget.destroy()
+
+        exts = {".mp4", ".mov", ".mkv"}
+        items = []
+
+        # Scrape VALORANT clips (shallow scan)
+        for fld in ["valo", "valorant"]:
+            p = RAW_CLIPS_DIR / fld
+            if p.exists() and p.is_dir():
+                for f in p.iterdir():
+                    if f.is_file() and f.suffix.lower() in exts and f not in [i[0] for i in items]:
+                        items.append((f, "VALORANT", COLOR_VALO))
+
+        # Scrape CS2 clips (shallow scan)
+        for fld in ["cs2", "cs", "counter-strike"]:
+            p = RAW_CLIPS_DIR / fld
+            if p.exists() and p.is_dir():
+                for f in p.iterdir():
+                    if f.is_file() and f.suffix.lower() in exts and f not in [i[0] for i in items]:
+                        items.append((f, "CS2", COLOR_CS2))
+
+        filter_choice = self.raw_filter_var.get()
+        if filter_choice != "All":
+            items = [it for it in items if it[1] == filter_choice]
+
+        items.sort(key=lambda it: it[0].stat().st_mtime, reverse=True)
+
+        if not items:
+            empty_lbl = ctk.CTkLabel(
+                self.raw_scroll,
+                text="No raw clips staged in raw_clips/ for this view.\nClick '+ Stage Clip(s)' to add gameplay files.",
+                text_color=COLOR_SUBTEXT, font=("Segoe UI", 13), justify="center"
+            )
+            empty_lbl.pack(pady=60)
+            return
+
+        for path, game_tag, color in items:
+            self._create_raw_clip_row(path, game_tag, color)
+
+    def _create_raw_clip_row(self, path: Path, game_tag: str, tag_color: str):
+        row = ctk.CTkFrame(self.raw_scroll, fg_color=COLOR_BG, corner_radius=8, border_width=1, border_color=COLOR_BORDER)
+        row.pack(fill="x", padx=10, pady=4)
+
+        stat = path.stat()
+        size_mb = stat.st_size / (1024 * 1024)
+        date_str = datetime.fromtimestamp(stat.st_mtime).strftime("%b %d, %Y · %I:%M %p")
+
+        info_box = ctk.CTkFrame(row, fg_color="transparent")
+        info_box.pack(side="left", padx=12, pady=8, fill="x", expand=True)
+
+        title_line = ctk.CTkFrame(info_box, fg_color="transparent")
+        title_line.pack(anchor="w")
+
+        # Game Badge Indicator
+        ctk.CTkLabel(
+            title_line, text=f" {game_tag} ", text_color=tag_color,
+            fg_color=COLOR_CARD, corner_radius=4, font=("Segoe UI", 10, "bold")
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkLabel(title_line, text=path.name, font=("Segoe UI", 12, "bold"), text_color=COLOR_TEXT).pack(side="left")
+
+        ctk.CTkLabel(
+            info_box,
+            text=f"{size_mb:.1f} MB  |  {date_str}  |  raw_clips/{path.parent.name}/",
+            font=("Segoe UI", 10), text_color=COLOR_SUBTEXT
+        ).pack(anchor="w", pady=(2, 0))
+
+        # Action Buttons
+        btn_box = ctk.CTkFrame(row, fg_color="transparent")
+        btn_box.pack(side="right", padx=10, pady=8)
+
+        ctk.CTkButton(
+            btn_box, text="▶  Play", width=70, height=28,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, font=("Segoe UI", 11, "bold"),
+            command=lambda p=path: os.startfile(str(p.resolve()))
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            btn_box, text="📂 Reveal", width=70, height=28,
+            fg_color=COLOR_CARD, hover_color=COLOR_BORDER, font=("Segoe UI", 11),
+            command=lambda p=path: subprocess.Popen(f'explorer /select,"{p.resolve()}"')
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            btn_box, text="✕", width=32, height=28,
+            fg_color=COLOR_CARD, hover_color=COLOR_ERROR, text_color=COLOR_ERROR,
+            command=lambda p=path: self._delete_raw_clip(p)
+        ).pack(side="left", padx=4)
+
+    def _delete_raw_clip(self, path: Path):
+        if messagebox.askyesno("Delete Raw Clip", f"Are you sure you want to remove staged clip:\n\n{path.name}?"):
+            try:
+                path.unlink(missing_ok=True)
+                self.scan_staged_clips()
+                self.refresh_raw_clips()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to delete file: {e}")
+
+    def open_raw_folder(self):
+        choice = self.raw_filter_var.get()
+        if choice == "VALORANT":
+            target = RAW_CLIPS_DIR / "valo"
+        elif choice == "CS2":
+            target = RAW_CLIPS_DIR / "cs2"
+        else:
+            target = RAW_CLIPS_DIR
+
+        target.mkdir(parents=True, exist_ok=True)
+        os.startfile(target)
+
+    # ------------------------------------------------------- Tab 3: Exports ---
 
     def _build_tab_exports(self):
         # Action Toolbar
@@ -227,7 +400,7 @@ class FragForgeApp(ctk.CTk):
         ).pack(side="left", padx=4)
 
         ctk.CTkButton(
-            bar, text="📂  Open Folder in Explorer", command=self.open_output_folder,
+            bar, text="📂 Open Folder in Explorer", command=self.open_output_folder,
             fg_color=COLOR_CARD, hover_color=COLOR_BORDER, text_color=COLOR_TEXT,
             border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=170,
         ).pack(side="right", padx=(8, 0))
@@ -246,7 +419,6 @@ class FragForgeApp(ctk.CTk):
         self.exports_scroll.pack(fill="both", expand=True, pady=(0, 6))
 
     def refresh_exports(self):
-        # Clear existing items
         for widget in self.exports_scroll.winfo_children():
             widget.destroy()
 
@@ -257,7 +429,6 @@ class FragForgeApp(ctk.CTk):
         final_shorts = [f for f in OUTPUT_DIR.iterdir() if f.is_file() and f.suffix.lower() in exts]
         trimmed_clips = [f for f in TRIMMED_DIR.iterdir() if f.is_file() and f.suffix.lower() in exts]
 
-        # Sort by most recently modified
         final_shorts.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         trimmed_clips.sort(key=lambda p: p.stat().st_mtime, reverse=True)
 
@@ -270,7 +441,6 @@ class FragForgeApp(ctk.CTk):
             empty_lbl.pack(pady=60)
             return
 
-        # Render Final Shorts Section
         if final_shorts:
             ctk.CTkLabel(
                 self.exports_scroll, text="✦ FINAL COMPILED SHORTS (Ready to Upload)",
@@ -280,7 +450,6 @@ class FragForgeApp(ctk.CTk):
             for video in final_shorts:
                 self._create_video_row(video, is_master=True)
 
-        # Render Trimmed Clips Section
         if trimmed_clips:
             ctk.CTkLabel(
                 self.exports_scroll, text="✦ INDIVIDUAL TRIMMED CLIPS",
@@ -305,7 +474,6 @@ class FragForgeApp(ctk.CTk):
         ctk.CTkLabel(info_box, text=video_path.name, font=("Segoe UI", 12, "bold"), text_color=name_color).pack(anchor="w")
         ctk.CTkLabel(info_box, text=f"{size_mb:.1f} MB  |  {date_str}", font=("Segoe UI", 10), text_color=COLOR_SUBTEXT).pack(anchor="w")
 
-        # Action Buttons
         btn_box = ctk.CTkFrame(row, fg_color="transparent")
         btn_box.pack(side="right", padx=10, pady=8)
 
@@ -335,10 +503,9 @@ class FragForgeApp(ctk.CTk):
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to delete file: {e}")
 
-    # -------------------------------------------------------- Tab 3: Config ---
+    # -------------------------------------------------------- Tab 4: Config ---
 
     def _build_tab_config(self):
-        # Action Toolbar
         bar = ctk.CTkFrame(self.tab_config, fg_color="transparent")
         bar.pack(fill="x", pady=(6, 10))
 
@@ -362,7 +529,6 @@ class FragForgeApp(ctk.CTk):
             border_width=1, border_color=COLOR_BORDER, corner_radius=8, width=95,
         ).pack(side="right")
 
-        # Code Editor
         editor_card = ctk.CTkFrame(self.tab_config, fg_color=COLOR_CARD, corner_radius=12, border_width=1, border_color=COLOR_BORDER)
         editor_card.pack(fill="both", expand=True, pady=(0, 6))
 
@@ -390,7 +556,6 @@ class FragForgeApp(ctk.CTk):
     def save_config_from_editor(self):
         content = self.config_editor.get("1.0", "end").strip()
         try:
-            # Validate JSON syntax before saving
             parsed = json.loads(content)
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(parsed, f, indent=2)
@@ -472,6 +637,7 @@ class FragForgeApp(ctk.CTk):
 
         self._append_log(f"[FragForge] Staged {copied} clip(s) into raw_clips/{target}/\n")
         self.scan_staged_clips()
+        self.refresh_raw_clips()
 
     def open_output_folder(self):
         OUTPUT_DIR.mkdir(exist_ok=True)
@@ -529,7 +695,8 @@ class FragForgeApp(ctk.CTk):
                     self.is_running = False
                     self.run_btn.configure(state="normal", text="▶    Forge Shorts Batch")
                     self.scan_staged_clips()
-                    self.refresh_exports()  # Automatically update the Exports tab when a render finishes!
+                    self.refresh_raw_clips()  # Updates raw clips view as files move to processed
+                    self.refresh_exports()    # Updates exports tab with new Shorts
                 else:
                     self._append_log(msg)
         except queue.Empty:
