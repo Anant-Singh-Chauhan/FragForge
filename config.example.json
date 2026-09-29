@@ -1,0 +1,48 @@
+{
+  "branding": {
+    "logo_path": "assets/branding/logo.png",
+    "bgm_path": "assets/branding/bgm.mp3",
+    "glitch_sfx_path": "assets/branding/glitch.mp3",
+    "subs_clip_path": "assets/branding/like_share_subs.mp4",
+    "intro_duration": 1.5,
+    "logo_outro_duration": 2.0,
+    "intro_start_zoom": 2.0,
+    "glitch_volume": 0.14,
+    "bgm_start_timestamp": 12.0,
+    "bgm_volume": 0.075,
+    "bgm_fade_duration": 1.5,
+    "crossfade_seconds": 0.5
+  },
+  "games": {
+    "valo": {
+      "name": "VALO",
+      "dir_name": "valo",
+      "folder_aliases": ["valorant", "valo"],
+      "player_aliases": ["YourInGameName"],
+      "latency_offset": 1.5,
+      "lead_buffer": 5.0,
+      "trail_buffer": 2.0,
+      "killfeed_crop": [0.703125, 0.083333, 0.994791, 0.194444],
+      "health_crop": [0.273437, 0.925925, 0.341145, 0.972222],
+      "ammo_crop": [0.659895, 0.925925, 0.727604, 0.972222],
+      "kf_overlay_w": 480,
+      "hp_overlay_w": 220,
+      "ammo_overlay_w": 220
+    },
+    "cs2": {
+      "name": "CS2",
+      "dir_name": "cs2",
+      "folder_aliases": ["cs2", "cs", "counter-strike", "counterstrike"],
+      "player_aliases": ["YourInGameName"],
+      "latency_offset": 1.0,
+      "lead_buffer": 5.0,
+      "trail_buffer": 2.5,
+      "killfeed_crop": [0.810, 0.050, 0.995, 0.160],
+      "health_crop": [0.315, 0.920, 0.395, 0.985],
+      "ammo_crop": [0.615, 0.920, 0.695, 0.985],
+      "kf_overlay_w": 480,
+      "hp_overlay_w": 220,
+      "ammo_overlay_w": 220
+    }
+  }
+}
