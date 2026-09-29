@@ -2,16 +2,18 @@
 Game Profiles & Media Configuration
 -----------------------------------
 Loads configuration from config.json at project root. Provides path definitions,
-dynamic player name regex compilation, and HUD coordinates.
+dynamic player name regex compilation, HUD coordinates, and missing-config guards.
 """
 
 import json
 from pathlib import Path
 import re
+import sys
 from typing import Any, Dict, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.json"
+CONFIG_EXAMPLE_PATH = PROJECT_ROOT / "config.example.json"
 
 # =====================================================================
 # Central Directory Paths
@@ -24,13 +26,37 @@ TEMP_DIR = PROJECT_ROOT / "temp"
 
 
 def load_config() -> Dict[str, Any]:
+    """
+    Safely reads config.json. If missing or corrupted, directs the user
+    to run setup.bat and consult faq.md rather than crashing abruptly.
+    """
     if not CONFIG_PATH.exists():
-        raise FileNotFoundError(
-            f"Configuration file not found at {CONFIG_PATH}. "
-            f"Ensure config.json exists in the project root."
-        )
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+        print("\n" + "=" * 65, file=sys.stderr)
+        print(" [FragForge Configuration Error]", file=sys.stderr)
+        print(" Missing required configuration file: config.json", file=sys.stderr)
+        print("-" * 65, file=sys.stderr)
+        print(" Resolution steps:", file=sys.stderr)
+        print("  1. Run 'setup.bat' in the project root to generate config.json", file=sys.stderr)
+        print("     automatically from config.example.json.", file=sys.stderr)
+        print("  2. Or manually copy config.example.json to config.json:", file=sys.stderr)
+        print("       copy config.example.json config.json", file=sys.stderr)
+        print("  3. Consult 'faq.md' under 'Configuration Issues' for help.", file=sys.stderr)
+        print("=" * 65 + "\n", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as err:
+        print("\n" + "=" * 65, file=sys.stderr)
+        print(" [FragForge Syntax Error in config.json]", file=sys.stderr)
+        print(f" Failed to parse JSON on line {err.lineno}, column {err.colno}:", file=sys.stderr)
+        print(f" Error: {err.msg}", file=sys.stderr)
+        print("-" * 65, file=sys.stderr)
+        print(" Fix the JSON formatting using the '⚙ Configuration' tab in", file=sys.stderr)
+        print(" the desktop app, or consult 'faq.md' to reset to defaults.", file=sys.stderr)
+        print("=" * 65 + "\n", file=sys.stderr)
+        sys.exit(1)
 
 
 _CONFIG = load_config()
@@ -39,9 +65,9 @@ _BRANDING = _CONFIG.get("branding", {})
 # =====================================================================
 # Branding & Audio Configuration
 # =====================================================================
-LOGO_PATH = PROJECT_ROOT / _BRANDING.get("logo_path", "assets/branding/avlLogo_cropped.png")
-BGM_PATH = PROJECT_ROOT / _BRANDING.get("bgm_path", "assets/branding/CM_03 Cruise.mp3")
-GLITCH_SFX_PATH = PROJECT_ROOT / _BRANDING.get("glitch_sfx_path", "assets/branding/glitched_sound.mp3")
+LOGO_PATH = PROJECT_ROOT / _BRANDING.get("logo_path", "assets/branding/logo.png")
+BGM_PATH = PROJECT_ROOT / _BRANDING.get("bgm_path", "assets/branding/bgm.mp3")
+GLITCH_SFX_PATH = PROJECT_ROOT / _BRANDING.get("glitch_sfx_path", "assets/branding/glitch.mp3")
 SUBS_CLIP_PATH = PROJECT_ROOT / _BRANDING.get("subs_clip_path", "assets/branding/like_share_subs.mp4")
 
 INTRO_DURATION = float(_BRANDING.get("intro_duration", 1.5))
@@ -61,7 +87,7 @@ CROSSFADE_SECONDS = float(_BRANDING.get("crossfade_seconds", 0.5))
 def build_name_regex(aliases: list[str]) -> re.Pattern:
     """
     Builds an OCR-tolerant regex pattern across all player aliases.
-    Tolerates common OCR misreads (l -> 1 or |).
+    Tolerates common OCR letter substitutions (l -> 1 or |).
     """
     patterns = []
     for alias in aliases:
@@ -77,7 +103,7 @@ def build_name_regex(aliases: list[str]) -> re.Pattern:
 PROFILES: Dict[str, dict] = {}
 
 for key, pdata in _CONFIG.get("games", {}).items():
-    player_aliases = pdata.get("player_aliases", ["avalanche"])
+    player_aliases = pdata.get("player_aliases", ["player"])
     PROFILES[key] = {
         "name": pdata.get("name", key.upper()),
         "dir_name": pdata.get("dir_name", key),
@@ -87,9 +113,9 @@ for key, pdata in _CONFIG.get("games", {}).items():
         "latency_offset": float(pdata.get("latency_offset", 1.5)),
         "lead_buffer": float(pdata.get("lead_buffer", 5.0)),
         "trail_buffer": float(pdata.get("trail_buffer", 2.0)),
-        "killfeed_crop": tuple(pdata.get("killfeed_crop")),
-        "health_crop": tuple(pdata.get("health_crop")),
-        "ammo_crop": tuple(pdata.get("ammo_crop")),
+        "killfeed_crop": tuple(pdata.get("killfeed_crop", [0.70, 0.08, 0.99, 0.20])),
+        "health_crop": tuple(pdata.get("health_crop", [0.27, 0.92, 0.34, 0.97])),
+        "ammo_crop": tuple(pdata.get("ammo_crop", [0.65, 0.92, 0.72, 0.97])),
         "kf_overlay_w": int(pdata.get("kf_overlay_w", 480)),
         "hp_overlay_w": int(pdata.get("hp_overlay_w", 220)),
         "ammo_overlay_w": int(pdata.get("ammo_overlay_w", 220)),

@@ -567,7 +567,7 @@ class FragForgeApp(ctk.CTk):
         lowered = line.lower()
         if "failed" in lowered or "error" in lowered:
             tag = "error"
-        elif "done" in lowered or "complete" in lowered or "peak at" in lowered:
+        elif "done" in lowered or "complete" in lowered or "frag detected" in lowered or "peak at" in lowered:
             tag = "success"
         elif line.startswith("[FragForge]"):
             tag = "muted"
@@ -656,6 +656,10 @@ class FragForgeApp(ctk.CTk):
         if self.auto_yes_var.get():
             cmd.append("--yes")
 
+        # Explicitly enforce UTF-8 IO encoding on Windows
+        sub_env = os.environ.copy()
+        sub_env["PYTHONIOENCODING"] = "utf-8"
+
         try:
             self.process = subprocess.Popen(
                 cmd,
@@ -664,6 +668,7 @@ class FragForgeApp(ctk.CTk):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=sub_env,
                 bufsize=1,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )

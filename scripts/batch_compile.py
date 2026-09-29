@@ -17,6 +17,14 @@ import sys
 import time
 from typing import Dict, List, Tuple
 
+# Force UTF-8 encoding across Windows console streams
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
 from profiles import (
     RAW_CLIPS_DIR,
     OUTPUT_DIR,
@@ -435,7 +443,7 @@ def export_sped_segment(ffmpeg_exe: str, clip: Path, start: float, end: float, v
 
 def concat_pieces(ffmpeg_exe: str, piece_paths: List[Path], output_path: Path) -> bool:
     filelist_path = TEMP_DIR / f"concat_list_{output_path.stem}.txt"
-    with open(filelist_path, "w") as f:
+    with open(filelist_path, "w", encoding="utf-8") as f:
         for p in piece_paths:
             f.write(f"file '{p.resolve().as_posix()}'\n")
 
