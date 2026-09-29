@@ -1,23 +1,20 @@
 """
 Batch Compile: Multi-Game Dynamic Compiler with Intro, Outro & Sync-Locked BGM
 ------------------------------------------------------------------------------
-1. Discovers clips strictly from configured game folders (shallow scan).
-2. Generates Intro (2.0x -> 1.0x zoom-out, 0.2s aggressive fade-in, silent audio).
-3. Generates Logo Outro (zoom-out with chunky block glitch and glitch SFX).
-4. Standardizes like_share_subs.mp4 (muted) to follow immediately after logo outro.
-5. Renders trimmed clips with HUD overlays to output/trimmed/.
-6. Compiles sequence in a single complex filtergraph to prevent audio/video desync.
-7. Layers background music starting at 12s with fade-in and dynamic end fade-out.
-8. Archives processed raw clips into raw_clips/processed/<game>/.
+Accepts optional CLI arguments:
+  --game {valo,cs2,all}  : Limit batch compile to a specific game (default: all)
+  --yes, -y              : Automatically approve compilation if over budget
 """
 
+import argparse
 from datetime import datetime
+import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import Dict, List, Tuple
 
 from profiles import (
@@ -37,6 +34,7 @@ from profiles import (
     BGM_START_TIMESTAMP,
     BGM_VOLUME,
     BGM_FADE_DURATION,
+    CROSSFADE_SECONDS,
     PROFILES,
     get_profile,
     identify_game,
@@ -58,8 +56,6 @@ GAP_SPEEDUP_THRESHOLD_SECONDS = 10.0
 SPEEDUP_FACTOR = 2.0
 SPEEDUP_EDGE_BUFFER_SECONDS = 2.0
 
-CROSSFADE_SECONDS = 0.5
-
 
 def get_timestamped_path(target_dir: Path, base_name: str, ext: str = ".mp4") -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -80,7 +76,7 @@ def get_timestamped_path(target_dir: Path, base_name: str, ext: str = ".mp4") ->
 def resolve_tool(name: str) -> str:
     path = shutil.which(name)
     if path is None:
-        print(f"Tool not found on PATH: {name}")
+        print(f"Tool not found on PATH: {name}", flush=True)
         sys.exit(1)
     return path
 
@@ -104,7 +100,7 @@ def get_video_info(ffprobe_exe: str, path: Path) -> Tuple[int, int, float]:
     return width, height, duration
 
 
-def discover_clips_by_game() -> Dict[str, List[Path]]:
+def discover_clips_by_game(filter_game: str = "all") -> Dict[str, List[Path]]:
     exts = {".mp4", ".mkv", ".mov"}
     clips_by_game: Dict[str, List[Path]] = {k: [] for k in PROFILES}
 
@@ -112,6 +108,8 @@ def discover_clips_by_game() -> Dict[str, List[Path]]:
         return clips_by_game
 
     for key, prof in PROFILES.items():
+        if filter_game != "all" and key != filter_game:
+            continue
         folder_names = {prof.get("dir_name", key)}
         folder_names.update(prof.get("folder_aliases", []))
 
@@ -126,15 +124,16 @@ def discover_clips_by_game() -> Dict[str, List[Path]]:
     for f in RAW_CLIPS_DIR.iterdir():
         if f.is_file() and f.suffix.lower() in exts:
             game_key = identify_game(f)
-            if game_key and f not in clips_by_game[game_key]:
-                clips_by_game[game_key].append(f)
+            if game_key and (filter_game == "all" or game_key == filter_game):
+                if f not in clips_by_game[game_key]:
+                    clips_by_game[game_key].append(f)
 
     return clips_by_game
 
 
 def render_intro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
     if not LOGO_PATH.exists():
-        print(f"Warning: Logo not found at {LOGO_PATH}. Skipping intro card.")
+        print(f"Warning: Logo not found at {LOGO_PATH}. Skipping intro card.", flush=True)
         return False
 
     zoom_diff = INTRO_START_ZOOM - 1.0
@@ -160,9 +159,8 @@ def render_intro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
 
 
 def render_logo_outro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
-    """Renders 2.0s logo zoom-out with chunky block glitch and glitch SFX."""
     if not LOGO_PATH.exists():
-        print(f"Warning: Logo not found at {LOGO_PATH}. Skipping logo outro card.")
+        print(f"Warning: Logo not found at {LOGO_PATH}. Skipping logo outro card.", flush=True)
         return False
 
     vf = (
@@ -206,9 +204,8 @@ def render_logo_outro_segment(ffmpeg_exe: str, output_path: Path) -> bool:
 
 
 def prepare_subs_segment(ffmpeg_exe: str, ffprobe_exe: str, output_path: Path) -> Tuple[bool, float]:
-    """Prepares like_share_subs.mp4 to 1080x1920 @ 60fps with muted (silent) audio track."""
     if not SUBS_CLIP_PATH.exists():
-        print(f"Notice: {SUBS_CLIP_PATH.name} not found in root directory. Skipping subs outro.")
+        print(f"Notice: {SUBS_CLIP_PATH.name} not found. Skipping subs outro.", flush=True)
         return False, 0.0
 
     _, _, duration = get_video_info(ffprobe_exe, SUBS_CLIP_PATH)
@@ -290,13 +287,17 @@ def compile_master_sequence(ffmpeg_exe: str, clips: List[Path], durations: List[
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"  Compile FAILED: {result.stderr[-800:]}")
+        print(f"  Compile FAILED: {result.stderr[-800:]}", flush=True)
         return False
     return True
 
 
-def prompt_user_timeout(prompt: str, timeout: int = 30) -> bool:
-    print(f"\n{prompt}")
+def prompt_user_timeout(prompt: str, auto_yes: bool = False, timeout: int = 30) -> bool:
+    if auto_yes:
+        print(f"\n{prompt}\n[Auto-Confirmed via flag] Compiling master Short anyway...", flush=True)
+        return True
+
+    print(f"\n{prompt}", flush=True)
     print(f"Compile master Short anyway? (y/n) [Auto-skip in {timeout}s]: ", end="", flush=True)
 
     if sys.platform == "win32":
@@ -306,10 +307,10 @@ def prompt_user_timeout(prompt: str, timeout: int = 30) -> bool:
             while time.time() - start_time < timeout:
                 if msvcrt.kbhit():
                     ch = msvcrt.getwch().lower()
-                    print(ch)
+                    print(ch, flush=True)
                     return ch == "y"
                 time.sleep(0.05)
-            print(f"\n[Timeout] {timeout}s elapsed without input. Proceeding with trimmed clips only.")
+            print(f"\n[Timeout] {timeout}s elapsed without input. Proceeding with trimmed clips only.", flush=True)
             return False
         except Exception:
             pass
@@ -329,7 +330,7 @@ def prompt_user_timeout(prompt: str, timeout: int = 30) -> bool:
     t.join(timeout=timeout)
 
     if t.is_alive():
-        print(f"\n[Timeout] {timeout}s elapsed without input. Proceeding with trimmed clips only.")
+        print(f"\n[Timeout] {timeout}s elapsed without input. Proceeding with trimmed clips only.", flush=True)
         return False
 
     return result[0]
@@ -438,11 +439,11 @@ def concat_pieces(ffmpeg_exe: str, piece_paths: List[Path], output_path: Path) -
 
 def process_clip(ffmpeg_exe: str, ffprobe_exe: str, reader, clip: Path, output_path: Path, profile: dict) -> bool:
     src_w, src_h, duration = get_video_info(ffprobe_exe, clip)
-    print(f"\nScanning kill-feed: {clip.name} [{profile['name']} - {src_w}x{src_h}]...")
+    print(f"\nScanning kill-feed: {clip.name} [{profile['name']} - {src_w}x{src_h}]...", flush=True)
     peaks, _ = detect_killfeed_peaks(reader, clip, profile)
 
     if not peaks:
-        print("  [Notice] No kills detected via OCR - exporting full clip as fallback.")
+        print("  [Notice] No kills detected via OCR - exporting full clip as fallback.", flush=True)
         action_blocks = [(0.0, duration)]
     else:
         action_blocks = build_action_blocks(peaks, duration, profile["lead_buffer"], profile["trail_buffer"])
@@ -450,10 +451,10 @@ def process_clip(ffmpeg_exe: str, ffprobe_exe: str, reader, clip: Path, output_p
     pieces = build_pieces(action_blocks)
     vf = get_filtergraph(profile, src_w, src_h)
 
-    print(f"  {len(pieces)} piece(s) generated after gap analysis:")
+    print(f"  {len(pieces)} piece(s) generated after gap analysis:", flush=True)
     for kind, s, e in pieces:
         tag = "SPED 2x" if kind == "sped" else "normal"
-        print(f"    [{s:.2f}s - {e:.2f}s] {tag}")
+        print(f"    [{s:.2f}s - {e:.2f}s] {tag}", flush=True)
 
     if len(pieces) == 1:
         _, start, end = pieces[0]
@@ -479,7 +480,26 @@ def natural_sort_key(path: Path):
     return int(match.group(1)) if match else float("inf")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="LocalYt Batch Compiler")
+    parser.add_argument(
+        "--game",
+        type=str,
+        default="all",
+        choices=["all", "valo", "cs2"],
+        help="Select game to process (default: all)",
+    )
+    parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Auto-confirm over-budget timeout warnings",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     ffmpeg_exe = resolve_tool("ffmpeg")
     ffprobe_exe = resolve_tool("ffprobe")
 
@@ -488,22 +508,21 @@ def main():
     TEMP_DIR.mkdir(exist_ok=True)
     PROCESSED_DIR.mkdir(exist_ok=True)
 
-    clips_by_game = discover_clips_by_game()
+    clips_by_game = discover_clips_by_game(filter_game=args.game)
     total_found = sum(len(c) for c in clips_by_game.values())
 
     if total_found == 0:
-        print(f"No video files found in configured game directories under {RAW_CLIPS_DIR}.")
-        sys.exit(0)
+        print(f"No video files found in configured game directories under {RAW_CLIPS_DIR}.", flush=True)
+        return
 
-    print(f"Found {total_found} clip(s) to process:")
+    print(f"Found {total_found} clip(s) to process:", flush=True)
     for game_key, clips in clips_by_game.items():
         if clips:
-            print(f"  [{game_key.upper()}]: {len(clips)} clip(s)")
+            print(f"  [{game_key.upper()}]: {len(clips)} clip(s)", flush=True)
             clips.sort(key=natural_sort_key)
 
     reader = get_ocr_reader()
 
-    # Pre-calculate content budget taking into account intro, logo outro, and subs clip
     subs_dur_probe = 0.0
     if SUBS_CLIP_PATH.exists():
         try:
@@ -520,9 +539,9 @@ def main():
         profile = get_profile(game_key)
         game_dir_name = profile.get("dir_name", game_key)
 
-        print(f"\n=======================================================")
-        print(f"  PROCESSING BATCH: {profile['name']} ({len(clips)} clip(s))")
-        print(f"=======================================================")
+        print(f"\n=======================================================", flush=True)
+        print(f"  PROCESSING BATCH: {profile['name']} ({len(clips)} clip(s))", flush=True)
+        print(f"=======================================================", flush=True)
 
         stage_outputs = []
         successful_clips = []
@@ -534,12 +553,12 @@ def main():
                 successful_clips.append(clip)
 
         if not stage_outputs:
-            print(f"No clips were successfully processed for {profile['name']}. Moving to next game.")
+            print(f"No clips were successfully processed for {profile['name']}. Moving to next game.", flush=True)
             continue
 
         durations = [get_video_info(ffprobe_exe, p)[2] for p in stage_outputs]
         total_duration = sum(durations)
-        print(f"\n[{profile['name']}] Total clips duration: {total_duration:.1f}s (Budget: {content_budget_seconds:.0f}s)")
+        print(f"\n[{profile['name']}] Total clips duration: {total_duration:.1f}s (Budget: {content_budget_seconds:.0f}s)", flush=True)
 
         should_compile = True
         if total_duration > content_budget_seconds:
@@ -547,10 +566,10 @@ def main():
                 f"WARNING: [{profile['name']}] Combined clip duration ({total_duration:.1f}s) "
                 f"exceeds your {content_budget_seconds:.0f}s allowance (leaving room for intro/outros)!"
             )
-            should_compile = prompt_user_timeout(warn_msg, timeout=30)
+            should_compile = prompt_user_timeout(warn_msg, auto_yes=args.yes, timeout=30)
 
         if should_compile:
-            print(f"\nRendering branding cards & out-cards...")
+            print(f"\nRendering branding cards & out-cards...", flush=True)
             intro_path = TEMP_DIR / f"{game_dir_name}_intro.mp4"
             logo_outro_path = TEMP_DIR / f"{game_dir_name}_logo_outro.mp4"
             subs_outro_path = TEMP_DIR / f"{game_dir_name}_subs_outro.mp4"
@@ -562,32 +581,28 @@ def main():
             full_sequence = []
             full_durations = []
 
-            # 1. Intro
             if has_intro:
                 full_sequence.append(intro_path)
                 full_durations.append(INTRO_DURATION)
 
-            # 2. Trimmed gameplay clips
             full_sequence.extend(stage_outputs)
             full_durations.extend(durations)
 
-            # 3. Logo Outro (zoom out + glitch)
             if has_logo_outro:
                 full_sequence.append(logo_outro_path)
                 full_durations.append(LOGO_OUTRO_DURATION)
 
-            # 4. Like / Share / Subscribe video (muted)
             if has_subs_outro:
                 full_sequence.append(subs_outro_path)
                 full_durations.append(subs_duration)
 
             final_output = get_timestamped_path(OUTPUT_DIR, base_name=f"{game_dir_name}_short")
             
-            print(f"Stitching {len(full_sequence)} segments and syncing background music ({BGM_PATH.name})...")
+            print(f"Stitching {len(full_sequence)} segments and syncing background music ({BGM_PATH.name})...", flush=True)
             if compile_master_sequence(ffmpeg_exe, full_sequence, full_durations, final_output):
-                print(f"Done [{profile['name']} Short]: {final_output.resolve()}")
+                print(f"Done [{profile['name']} Short]: {final_output.resolve()}", flush=True)
             else:
-                print(f"Failed compiling master sequence for {profile['name']}.")
+                print(f"Failed compiling master sequence for {profile['name']}.", flush=True)
 
             if has_intro:
                 intro_path.unlink(missing_ok=True)
@@ -596,7 +611,7 @@ def main():
             if has_subs_outro:
                 subs_outro_path.unlink(missing_ok=True)
         else:
-            print(f"[{profile['name']}] Skipping master compiled short. Preserving individual trimmed clips in {TRIMMED_DIR}.")
+            print(f"[{profile['name']}] Skipping master compiled short. Preserving individual trimmed clips in {TRIMMED_DIR}.", flush=True)
 
         game_archive_dir = PROCESSED_DIR / game_dir_name
         game_archive_dir.mkdir(parents=True, exist_ok=True)
@@ -604,9 +619,9 @@ def main():
             dest = game_archive_dir / clip.name
             shutil.move(str(clip), str(dest))
 
-        print(f"Archived {len(successful_clips)} {profile['name']} clip(s) to {game_archive_dir}")
+        print(f"Archived {len(successful_clips)} {profile['name']} clip(s) to {game_archive_dir}", flush=True)
 
-    print("\nAll batches completed.")
+    print("\nAll batches completed.", flush=True)
 
 
 if __name__ == "__main__":
