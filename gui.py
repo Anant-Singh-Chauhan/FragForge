@@ -6,9 +6,6 @@ Standalone desktop GUI with integrated tabs:
   2. 📹 Raw Clips   : In-app browser for staged clips (Play, Reveal, Filter, Delete)
   3. 📁 Exports     : In-app video browser for completed Shorts and trimmed pieces
   4. ⚙ Config      : In-app JSON editor with live syntax validation and saving
-
-Requires:
-  pip install customtkinter pillow
 """
 
 import ctypes
@@ -25,7 +22,13 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+
+# Safe PIL import with fallback
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 # Force Windows to treat FragForge as its own application on the Taskbar
 if sys.platform == "win32":
@@ -110,8 +113,8 @@ class FragForgeApp(ctk.CTk):
     # -------------------------------------------------------- Window Icon ---
 
     def _set_app_icon(self):
-        """Sets the native Windows icon for the Titlebar, Taskbar, and Alt+Tab."""
-        # 1. Primary: Load native Windows multi-res .ico from assets/public/appIcon.ico
+        """Sets the native Windows icon for Titlebar and Taskbar with fallbacks."""
+        # 1. Native Windows .ico
         if APP_ICON_ICO.exists():
             try:
                 self.iconbitmap(str(APP_ICON_ICO.resolve()))
@@ -119,56 +122,57 @@ class FragForgeApp(ctk.CTk):
             except Exception:
                 pass
 
-        # 2. Fallback: Load PNG if .ico is unavailable
-        png_candidates = [
-            APP_ICON_PNG,
-            PUBLIC_ASSETS_DIR / "logo.png",
-            BRANDING_DIR / "app_logo.png",
-        ]
-        for p in png_candidates:
-            if p.exists():
-                try:
-                    pil_img = Image.open(p)
-                    self._taskbar_icon_ref = ImageTk.PhotoImage(pil_img)
-                    self.wm_iconphoto(True, self._taskbar_icon_ref)
-                    break
-                except Exception:
-                    pass
+        # 2. PNG Icon fallback via Pillow
+        if HAS_PIL:
+            png_candidates = [
+                APP_ICON_PNG,
+                PUBLIC_ASSETS_DIR / "logo.png",
+                BRANDING_DIR / "app_logo.png",
+            ]
+            for p in png_candidates:
+                if p.exists():
+                    try:
+                        pil_img = Image.open(p)
+                        self._taskbar_icon_ref = ImageTk.PhotoImage(pil_img)
+                        self.wm_iconphoto(True, self._taskbar_icon_ref)
+                        break
+                    except Exception:
+                        pass
 
     # ---------------------------------------------------------------- UI ---
 
     def _build_ui(self):
-        # Header (Persistent across all tabs)
+        # Header
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(16, 4))
 
         brand_cluster = ctk.CTkFrame(header, fg_color="transparent")
         brand_cluster.pack(side="left")
 
-        # In-App Visual Logo
-        logo_path = None
-        for candidate in [
-            APP_ICON_PNG,
-            APP_ICON_ICO,
-            PUBLIC_ASSETS_DIR / "logo.png",
-            BRANDING_DIR / "app_logo.png",
-        ]:
-            if candidate.exists():
-                logo_path = candidate
-                break
+        # In-App Header Logo (Only attempts if Pillow is installed)
+        if HAS_PIL:
+            logo_path = None
+            for candidate in [
+                APP_ICON_PNG,
+                PUBLIC_ASSETS_DIR / "logo.png",
+                BRANDING_DIR / "app_logo.png",
+            ]:
+                if candidate.exists():
+                    logo_path = candidate
+                    break
 
-        if logo_path:
-            try:
-                pil_logo = Image.open(logo_path)
-                self.header_logo = ctk.CTkImage(
-                    light_image=pil_logo,
-                    dark_image=pil_logo,
-                    size=(40, 40)
-                )
-                logo_label = ctk.CTkLabel(brand_cluster, image=self.header_logo, text="")
-                logo_label.pack(side="left", padx=(0, 12))
-            except Exception:
-                pass
+            if logo_path:
+                try:
+                    pil_logo = Image.open(logo_path)
+                    self.header_logo = ctk.CTkImage(
+                        light_image=pil_logo,
+                        dark_image=pil_logo,
+                        size=(40, 40)
+                    )
+                    logo_label = ctk.CTkLabel(brand_cluster, image=self.header_logo, text="")
+                    logo_label.pack(side="left", padx=(0, 12))
+                except Exception:
+                    pass
 
         title_box = ctk.CTkFrame(brand_cluster, fg_color="transparent")
         title_box.pack(side="left")

@@ -144,7 +144,7 @@ if not exist "output\trimmed" mkdir "output\trimmed"
 if not exist "temp" mkdir "temp"
 if not exist "assets\branding" mkdir "assets\branding"
 if not exist "assets\public" mkdir "assets\public"
-echo [OK] Folder scaffolding verified (raw_clips, output, temp, assets/public).
+echo [OK] Folder scaffolding verified (raw_clips, output, temp, assets).
 
 echo.
 echo ========================================================

@@ -16,38 +16,39 @@ dist/
 build/
 
 # --- Private Configuration ---
-# Keep config.example.json tracked, but ignore the active config
+# Keep config.example.json tracked, but ignore active private config
 config.json
 
 # --- Personal Branding Assets ---
-# Keeps personal logo, glitch SFX, and end-cards out of the public repo
+# Keeps personal logos, glitch SFX, and end-cards private
 assets/branding/*
 !assets/branding/.gitkeep
-!assets/branding/sample_*
-!assets/branding/placeholder_*
+
+# Ensure public app assets (appIcon.ico, etc.) are always tracked
+!assets/public/
+assets/public/*
+
+# Generator scripts (if kept local)
+scripts/generate_app_logo*.py
 
 # --- Gameplay Footage, Renders & Temp Files ---
-# Ignore all staged clips and archived gameplay
 raw_clips/**
 !raw_clips/
 !raw_clips/.gitkeep
 !raw_clips/valo/.gitkeep
 !raw_clips/cs2/.gitkeep
 
-# Ignore all generated vertical Shorts and trimmed fragments
 output/**
 !output/
 !output/.gitkeep
 !output/trimmed/.gitkeep
 
-# Ignore ephemeral scratch workspace & concat files
 temp/**
 !temp/
 !temp/.gitkeep
 *.txt.concat
 
 # --- Global Media Catch-All ---
-# Failsafe against accidental commits of heavy video/audio
 *.mp4
 *.mkv
 *.mov
@@ -60,11 +61,6 @@ temp/**
 *.sublime-project
 *.sublime-workspace
 Thumbs.db
-Thumbs.db:encryptable
 ehthumbs.db
-ehthumbs_vista.db
 [Dd]esktop.ini
 .DS_Store
-
-# --- app icon generator ---
-scripts/generate_app_logo*.py

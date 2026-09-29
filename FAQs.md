@@ -87,7 +87,7 @@ To restore default branding, place your `.png` and `.mp3` assets in `assets/bran
 ### Q: Why did the scan report `No kills detected via OCR` on a clip with frags?
 1. **In-Game Name Misalignment:** Verify the `player_aliases` array in `config.json`. Add any nicknames, shortened tags, or smurf account names:
    ```json
-   "player_aliases": ["Avalanche", "avalance981", "Ava"]
+   "player_aliases": ["YourPlayerName", "AlternativeTag", "SmurfName"]
    ```
 2. **Display Resolution / HUD Scaling:** FragForge's default crops expect a standard 16:9 native HUD layout (1920x1080 or 2560x1440). If your in-game killfeed scale or position is customized, update `killfeed_crop` coordinates in `config.json`.
 3. **Regex OCR Substitutions:** FragForge automatically substitutes `l` with `[l1|]` to handle common OCR misreads. If your name uses unusual symbols, add those variations explicitly to `player_aliases`.
